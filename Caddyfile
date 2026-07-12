@@ -1,0 +1,50 @@
+# Caddyfile di PRODUZIONE per CieloBuio - Sistema segnalazioni.
+#
+# Caddy gestisce automaticamente il certificato HTTPS (Let's Encrypt) per il
+# dominio indicato: non serve configurare TLS a mano.
+#
+# Prima di usarlo:
+# 1. Sostituisci "segnalazioni.esempio.it" con il dominio reale
+#    dell'associazione (deve già puntare, via DNS, all'IP di questo server).
+# 2. Assicurati che le porte 80 e 443 del server siano raggiungibili da
+#    internet (necessarie per l'emissione automatica del certificato).
+# 3. L'app Next.js (vedi package.json -> "start") deve essere in esecuzione
+#    su localhost:3000 (di norma gestita da systemd o da un process manager,
+#    vedi SETUP.md).
+#
+# Per un ambiente di staging/anteprima su sotto-dominio, duplica il blocco
+# cambiando solo l'indirizzo e il "reverse_proxy" (usa un'altra porta se
+# esegui una seconda istanza dell'app in parallelo).
+
+segnalazioni.esempio.it {
+        # Redirige automaticamente http:// verso https:// (comportamento di
+        # default di Caddy, esplicitato qui per chiarezza).
+        reverse_proxy localhost:3000 {
+                header_up Host {host}
+                header_up X-Forwarded-For {remote_host}
+                header_up X-Forwarded-Proto {scheme}
+                header_up X-Real-IP {remote_host}
+        }
+
+        # Header di sicurezza aggiuntivi a livello di proxy (in aggiunta a
+        # quelli già impostati dall'app in src/middleware.ts e next.config.ts).
+        header {
+                Strict-Transport-Security "max-age=63072000; includeSubDomains"
+                X-Content-Type-Options "nosniff"
+                Referrer-Policy "strict-origin-when-cross-origin"
+        }
+
+        # Compressione delle risposte (riduce il traffico su hosting economici
+        # con banda limitata, coerente col vincolo di basso costo del progetto).
+        encode gzip zstd
+
+        # Log di accesso in formato JSON, utile per diagnosi senza dover
+        # installare strumenti aggiuntivi.
+        log {
+                output file /var/log/caddy/cielobuio-access.log {
+                        roll_size 10MB
+                        roll_keep 5
+                }
+                format json
+        }
+}

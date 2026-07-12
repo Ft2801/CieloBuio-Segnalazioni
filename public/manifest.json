@@ -1,0 +1,26 @@
+{
+  "name": "CieloBuio, segnalazioni impianti non conformi",
+  "short_name": "CieloBuio",
+  "description": "Sistema di segnalazione PEC di impianti di illuminazione non conformi alle leggi regionali italiane",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f4f5",
+  "theme_color": "#f4f4f5",
+  "orientation": "portrait-primary",
+  "lang": "it",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

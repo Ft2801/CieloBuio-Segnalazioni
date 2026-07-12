@@ -1,0 +1,78 @@
+# CieloBuio Segnalazioni - Docker Compose
+# Ambiente completo: app + PostgreSQL + Caddy (reverse proxy)
+# Autore: Fabio Tempera (2026)
+
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cielobuio-app
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://cielobuio:${DB_PASSWORD:?DB_PASSWORD obbligatoria - imposta una password sicura}@db:5432/cielobuio_segnalazioni?schema=public
+      - NEXT_PUBLIC_BASE_URL=${NEXT_PUBLIC_BASE_URL:-https://segnalazioni.esempio.it}
+      - PEC_SMTP_HOST=${PEC_SMTP_HOST:-}
+      - PEC_SMTP_PORT=${PEC_SMTP_PORT:-465}
+      - PEC_SMTP_USER=${PEC_SMTP_USER:-}
+      - PEC_SMTP_PASSWORD=${PEC_SMTP_PASSWORD:-}
+      - PEC_FROM=${PEC_FROM:-}
+      - RETENTION_SEGNALAZIONI_ANNI=${RETENTION_SEGNALAZIONI_ANNI:-10}
+      - TRANSIZIONE_INVIATA_GIORNI=${TRANSIZIONE_INVIATA_GIORNI:-7}
+      - REMINDER_GIORNI=${REMINDER_GIORNI:-30}
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - app-storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - cielobuio-net
+
+  db:
+    image: postgres:16-alpine
+    container_name: cielobuio-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=cielobuio_segnalazioni
+      - POSTGRES_USER=cielobuio
+      - POSTGRES_PASSWORD=${DB_PASSWORD:?DB_PASSWORD obbligatoria - imposta una password sicura}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cielobuio -d cielobuio_segnalazioni"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cielobuio-net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: cielobuio-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    networks:
+      - cielobuio-net
+
+volumes:
+  app-storage:
+  db-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  cielobuio-net:
+    driver: bridge

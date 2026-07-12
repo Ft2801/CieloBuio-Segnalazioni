@@ -1,0 +1,84 @@
+name: Deploy demo su GitHub Pages
+
+# Build statica (solo UI + modalità demo con account fittizi, senza API
+# routes né database) pubblicata su GitHub Pages. Del tutto separata
+# dalla build di produzione: quest'ultima resta gestita altrove
+# (server Node con next.config.ts "standalone", vedi README/SETUP.md).
+
+on:
+  push:
+    branches:
+      - main
+  # Permette di avviare il deploy manualmente dalla tab Actions di
+  # GitHub, senza dover fare un push, utile per rigenerare la demo dopo
+  # una modifica ai soli dati demo o per un primo test.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Evita che due deploy sovrapposti si scavalchino; lascia però che una
+# run in corso finisca (cancel-in-progress: false) per non pubblicare
+# stati intermedi incoerenti.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: 'npm'
+
+      - name: Installazione dipendenze
+        run: npm ci
+
+      # Necessario perché src/lib/db.ts importa @prisma/client anche se,
+      # con output "export", le API routes che lo usano davvero non
+      # vengono incluse nel bundle finale: il generatore dei tipi deve
+      # comunque esistere perché il progetto compili durante il typecheck.
+      - name: Generazione client Prisma (solo tipi, nessun database usato)
+        run: npx prisma generate
+
+      - name: Configurazione GitHub Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      # NEXT_PUBLIC_BASE_PATH: vuoto se il repo è <utente>.github.io
+      # (Pages "utente", servito dalla root del dominio), altrimenti
+      # "/<nome-repo>" (Pages "progetto", servito da un sottopercorso).
+      # steps.pages.outputs.base_path lo calcola automaticamente in base
+      # al repository su cui gira il workflow.
+      - name: Build statica (export)
+        run: npm run build:pages
+        env:
+          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          # Valore fittizio: nessuna route che lo usa realmente viene
+          # inclusa in una build "export", ma la validazione delle env
+          # var lato build richiede comunque che la variabile esista.
+          DATABASE_URL: "postgresql://placeholder:placeholder@localhost:5432/placeholder?schema=public"
+
+      - name: Upload artifact Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy su GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

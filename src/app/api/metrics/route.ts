@@ -1,0 +1,118 @@
+/**
+ * API: GET /api/metrics
+ * Endpoint Prometheus per monitoring (CPU, memoria, richieste).
+ * Ritorna metriche in formato text/plain compatibile con Prometheus scrape.
+ *
+ * Protezione: l'endpoint supporta DUE modalità di autenticazione:
+ *
+ *  1. **Token statico** (raccomandato per Prometheus): se la variabile
+ *     d'ambiente `METRICS_TOKEN` è impostata, l'endpoint accetta
+ *     richieste con header `Authorization: Bearer <token>` o query
+ *     param `?token=<token>`. Questo è il modo raccomandato per
+ *     Prometheus, che non supporta l'autenticazione via cookie HTTP-only.
+ *
+ *  2. **Cookie di sessione admin** (per ispezione manuale da browser):
+ *     se `METRICS_TOKEN` NON è impostata, l'endpoint richiede il
+ *     cookie di sessione di un utente admin. Questa modalità è
+ *     comoda per ispezionare le metriche dal browser dopo il login,
+ *     ma NON è compatibile con Prometheus (che non può inviare cookie).
+ *
+ * In produzione, configurare `METRICS_TOKEN` a una stringa casuale
+ * lunga (es. 32 byte hex generati con `openssl rand -hex 32`) e
+ * configurare Prometheus con `bearer_token` nel job di scrape.
+ *
+ * Esempio configurazione Prometheus:
+ *   - job_name: 'cielobuio'
+ *     scrape_interval: 30s
+ *     metrics_path: /api/metrics
+ *     bearer_token: <METRICS_TOKEN>
+ *     static_configs:
+ *       - targets: ['app:3000']
+ *
+ * Autore: Fabio Tempera (2026)
+ */
+import { NextRequest, NextResponse } from "next/server";
+import { getSessionUser, canManageConfiguration } from "@/lib/auth";
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+export async function GET(req: NextRequest) {
+  // Autenticazione: due modalità mutuamente esclusive.
+  const metricsToken = process.env.METRICS_TOKEN;
+
+  if (metricsToken) {
+    // Modalità 1: token statico (per Prometheus).
+    // Accetta sia header Authorization: Bearer <token> sia query ?token=<token>.
+    const authHeader = req.headers.get("authorization") ?? "";
+    const bearerToken = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7).trim()
+      : "";
+    const queryToken = req.nextUrl.searchParams.get("token") ?? "";
+    const providedToken = bearerToken || queryToken;
+
+    if (!providedToken || !timingSafeEqual(providedToken, metricsToken)) {
+      return NextResponse.json(
+        { error: "Non autorizzato" },
+        { status: 403 }
+      );
+    }
+  } else {
+    // Modalità 2: cookie di sessione admin (per ispezione browser).
+    const user = await getSessionUser();
+    if (!user || !canManageConfiguration(user)) {
+      return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
+    }
+  }
+
+  const memUsage = process.memoryUsage();
+  const cpuUsage = process.cpuUsage();
+
+  const metrics = [
+    "# HELP cielobuio_process_uptime_seconds Tempo di attività del processo in secondi",
+    "# TYPE cielobuio_process_uptime_seconds gauge",
+    `cielobuio_process_uptime_seconds ${process.uptime()}`,
+    "",
+    "# HELP cielobuio_process_memory_rss_bytes Memoria RSS in byte",
+    "# TYPE cielobuio_process_memory_rss_bytes gauge",
+    `cielobuio_process_memory_rss_bytes ${memUsage.rss}`,
+    "",
+    "# HELP cielobuio_process_memory_heap_used_bytes Memoria heap usata in byte",
+    "# TYPE cielobuio_process_memory_heap_used_bytes gauge",
+    `cielobuio_process_memory_heap_used_bytes ${memUsage.heapUsed}`,
+    "",
+    "# HELP cielobuio_process_memory_heap_total_bytes Memoria heap totale in byte",
+    "# TYPE cielobuio_process_memory_heap_total_bytes gauge",
+    `cielobuio_process_memory_heap_total_bytes ${memUsage.heapTotal}`,
+    "",
+    "# HELP cielobuio_process_memory_external_bytes Memoria esterna in byte",
+    "# TYPE cielobuio_process_memory_external_bytes gauge",
+    `cielobuio_process_memory_external_bytes ${memUsage.external}`,
+    "",
+    "# HELP cielobuio_process_cpu_user_microseconds CPU user time in microsecondi",
+    "# TYPE cielobuio_process_cpu_user_microseconds counter",
+    `cielobuio_process_cpu_user_microseconds ${cpuUsage.user}`,
+    "",
+    "# HELP cielobuio_process_cpu_system_microseconds CPU system time in microsecondi",
+    "# TYPE cielobuio_process_cpu_system_microseconds counter",
+    `cielobuio_process_cpu_system_microseconds ${cpuUsage.system}`,
+    "",
+    "# HELP cielobuio_node_version Node.js major version",
+    "# TYPE cielobuio_node_version gauge",
+    `cielobuio_node_version ${process.versions.node.split(".")[0]}`,
+    "",
+  ].join("\n");
+
+  return new NextResponse(metrics, {
+    headers: {
+      "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
+}

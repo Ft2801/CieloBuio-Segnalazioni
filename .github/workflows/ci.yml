@@ -1,0 +1,79 @@
+# CieloBuio Segnalazioni - CI/CD Pipeline
+# Esegue typecheck, lint, test con coverage, build su ogni push/PR
+# Autore: Fabio Tempera (2026)
+
+name: CI/CD
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  quality:
+    name: TypeCheck, Lint, Test, Build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: cielobuio_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/cielobuio_test?schema=public"
+
+      - name: Push schema to test DB
+        run: npx prisma db push --force-reset
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/cielobuio_test?schema=public"
+
+      - name: TypeCheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test with coverage
+        run: npm run test:coverage
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/cielobuio_test?schema=public"
+          NODE_ENV: test
+
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/cielobuio_test?schema=public"
+          NEXT_PUBLIC_BASE_URL: "https://test.example.com"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
