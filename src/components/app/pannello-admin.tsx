@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
 import { Plus, Globe, MapPin, Building2, Users, Edit, Trash2, Save } from "lucide-react";
 import { labelRuolo } from "@/lib/types";
 import type { SessionUser } from "@/lib/types";
@@ -158,6 +159,7 @@ function RegioniTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast
     const data = await res.json().catch(() => ({}));
     setRegioni(data.regioni ?? []);
   }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { carica(); }, []);
 
   function apriCrea() {
@@ -366,6 +368,7 @@ function ProvinceTab({ toast, user }: { toast: ReturnType<typeof useToast>["toas
     setProvince(dataProvince.province ?? []);
     setRegioni(dataRegioni.regioni ?? []);
   }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { carica(); }, []);
 
   function apriCrea() {
@@ -530,15 +533,25 @@ function ComuniTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
   const [comuni, setComuni] = useState<Comune[]>([]);
   const [province, setProvince] = useState<Provincia[]>([]);
   const [search, setSearch] = useState("");
+  // Debounce della ricerca comuni: la tabella comuni può avere 8000+
+  // record in Italia, e una fetch per ogni keystroke saturerebbe il
+  // server. Allineato al debounce di lista-segnalazioni (300ms).
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [dialog, setDialog] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<{ nome: string; provinciaId: string; cap: string; pecComune: string; nomeSindaco: string; noteAggiornamento: string }>({
     nome: "", provinciaId: "", cap: "", pecComune: "", nomeSindaco: "", noteAggiornamento: "",
   });
 
+  // Debounce 300ms su search: evita fetch multipli durante la digitazione.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
   async function carica() {
     if (isDemoSession(user)) return; // vedi banner nel componente padre
-    const url = search ? `/api/config/comuni?search=${encodeURIComponent(search)}` : "/api/config/comuni";
+    const url = debouncedSearch ? `/api/config/comuni?search=${encodeURIComponent(debouncedSearch)}` : "/api/config/comuni";
     // Esegue le 2 fetch in parallelo per ridurre la latenza
     const [resComuni, resProvince] = await Promise.all([
       fetch(url),
@@ -551,7 +564,8 @@ function ComuniTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
     setComuni(dataComuni.comuni ?? []);
     setProvince(dataProvince.province ?? []);
   }
-  useEffect(() => { carica(); }, [search]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { carica(); }, [debouncedSearch]);
 
   function apriCrea() {
     setForm({ nome: "", provinciaId: "", cap: "", pecComune: "", nomeSindaco: "", noteAggiornamento: "" });
@@ -652,8 +666,8 @@ function ComuniTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
                 // da oltre 6 mesi. Validiamo esplicitamente che la stringa
                 // sia una data ISO valida: noteAggiornamento è un campo
                 // testuale libero, e `new Date(stringa-non-data).getTime()`
-                // ritornerebbe NaN, facendo fallire il check (il comune
-                // verrebbe marcato come "verificato" anche se non lo è).
+                // ritornerebbe NaN. In quel caso trattiamo il comune come
+                // "da verificare" anziché come "verificato".
                 const SEI_MESI_MS = 6 * 30 * 24 * 60 * 60 * 1000;
                 const parsedDate = c.noteAggiornamento ? new Date(c.noteAggiornamento) : null;
                 const isValidDate = parsedDate !== null && !isNaN(parsedDate.getTime());
@@ -765,11 +779,11 @@ function UtentiTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
   const [form, setForm] = useState<{
     email: string; nomeCognome: string; password: string; ruolo: string;
     provinciaId: string; regioneId: string; pec: string; emailOrdinaria: string;
-    indirizzo: string; inizialiProtocollo: string;
+    indirizzo: string; inizialiProtocollo: string; attivo: boolean;
   }>({
     email: "", nomeCognome: "", password: "", ruolo: "volontario",
     provinciaId: "", regioneId: "", pec: "", emailOrdinaria: "",
-    indirizzo: "", inizialiProtocollo: "",
+    indirizzo: "", inizialiProtocollo: "", attivo: true,
   });
 
   async function carica() {
@@ -789,13 +803,14 @@ function UtentiTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
     setProvince(dataProvince.province ?? []);
     setRegioni(dataRegioni.regioni ?? []);
   }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { carica(); }, []);
 
   function apriCrea() {
     setForm({
       email: "", nomeCognome: "", password: "", ruolo: "volontario",
       provinciaId: "", regioneId: "", pec: "", emailOrdinaria: "",
-      indirizzo: "", inizialiProtocollo: "",
+      indirizzo: "", inizialiProtocollo: "", attivo: true,
     });
     setEditingId(null);
     setDialog(true);
@@ -813,6 +828,7 @@ function UtentiTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
       emailOrdinaria: u.emailOrdinaria ?? "",
       indirizzo: u.indirizzo ?? "",
       inizialiProtocollo: u.inizialiProtocollo ?? "",
+      attivo: u.attivo,
     });
     setEditingId(u.id);
     setDialog(true);
@@ -845,6 +861,7 @@ function UtentiTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
         emailOrdinaria: form.emailOrdinaria || null,
         indirizzo: form.indirizzo || null,
         inizialiProtocollo: form.inizialiProtocollo || null,
+        attivo: form.attivo,
       };
       if (form.password) {
         payload.newPassword = form.password;
@@ -877,7 +894,7 @@ function UtentiTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
     setForm({
       email: "", nomeCognome: "", password: "", ruolo: "volontario",
       provinciaId: "", regioneId: "", pec: "", emailOrdinaria: "",
-      indirizzo: "", inizialiProtocollo: "",
+      indirizzo: "", inizialiProtocollo: "", attivo: true,
     });
     setEditingId(null);
     carica();
@@ -983,6 +1000,19 @@ function UtentiTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
                 <Input maxLength={2} value={form.inizialiProtocollo} onChange={(e) => setForm({ ...form, inizialiProtocollo: e.target.value.toUpperCase() })} placeholder="DB" />
               </div>
             </div>
+            <div className="flex items-center gap-3 py-2">
+              <Switch
+                checked={form.attivo}
+                onCheckedChange={(v) => setForm({ ...form, attivo: v })}
+                id="user-attivo"
+              />
+              <Label htmlFor="user-attivo" className="cursor-pointer">
+                Utente attivo
+                <span className="block text-xs text-muted-foreground font-normal">
+                  Disattivato: l'utente non può accedere ma i suoi record restano per audit
+                </span>
+              </Label>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Email</Label>
@@ -990,7 +1020,12 @@ function UtentiTab({ toast, user }: { toast: ReturnType<typeof useToast>["toast"
               </div>
               <div>
                 <Label>Password</Label>
-                <Input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                <Input
+                  type="password"
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  autoComplete="new-password"
+                />
                 <p className="text-xs text-muted-foreground mt-1">
                   Almeno 12 caratteri, con maiuscola, minuscola, numero e carattere speciale.
                 </p>

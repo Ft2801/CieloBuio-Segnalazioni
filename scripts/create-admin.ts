@@ -28,6 +28,11 @@ import { stdin, stdout } from "node:process";
 import { emailSchema, strongPasswordSchema } from "../src/lib/validation";
 
 const prisma = new PrismaClient();
+
+// Cost factor bcrypt: allineato a quello usato in src/lib/auth.ts.
+// Usiamo la stessa costante per garantire coerenza tra hash generati
+// da questo script e verifiche nel login. Se cambi il cost, cambialo
+// anche in src/lib/auth.ts.
 const BCRYPT_COST = 12;
 
 async function ask(rl: readline.Interface, domanda: string): Promise<string> {
@@ -44,8 +49,14 @@ async function askPassword(domanda: string): Promise<string> {
   const isTTY = stdin.isTTY;
 
   if (!isTTY) {
-    // Fallback non interattivo (es. pipe/CI): legge una riga normale
-    // usando l'API a Promise, senza mascheramento.
+    // Fallback non interattivo (es. pipe/CI): preferiamo la env var
+    // ADMIN_PASSWORD se presente (evita leak della password nei log di
+    // CI dove stdout viene catturato). Se la env var non è impostata,
+    // chiediamo via readline (la password sarà visibile nel terminale,
+    // ma questo è il comportamento storico per backward compat).
+    if (process.env.ADMIN_PASSWORD && domanda.toLowerCase().includes("password")) {
+      return process.env.ADMIN_PASSWORD;
+    }
     const rl = readline.createInterface({ input: stdin, output: stdout });
     const answer = await rl.question(domanda);
     rl.close();
@@ -70,7 +81,12 @@ async function askPassword(domanda: string): Promise<string> {
         return;
       }
       if (code === 3) {
-        // Ctrl+C
+        // Ctrl+C: ripristina il terminale in modalità cooked prima di
+        // uscire, altrimenti il terminale resta in raw mode e l'utente
+        // deve digitare `stty sane` per ripristinarlo.
+        stdin.setRawMode(false);
+        stdin.pause();
+        stdin.removeListener("data", onData);
         process.exit(1);
       }
       if (code === 127 || code === 8) {
@@ -201,11 +217,15 @@ async function main() {
   console.log("Puoi ora accedere con queste credenziali dalla schermata di login.");
 }
 
-main()
-  .catch((e) => {
+async function run() {
+  try {
+    await main();
+  } catch (e) {
     console.error("Errore:", e instanceof Error ? e.message : e);
-    process.exit(1);
-  })
-  .finally(async () => {
     await prisma.$disconnect();
-  });
+    process.exit(1);
+  }
+  await prisma.$disconnect();
+}
+
+run();

@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import { getSessionUser, canManageConfiguration } from "@/lib/auth";
 import { nuovoComuneSchema, validate } from "@/lib/validation";
 import { logger } from "@/lib/logger";
@@ -100,8 +101,39 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
       );
     }
 
-    await db.comune.delete({ where: { id: comuneId } });
-    return NextResponse.json({ ok: true });
+    // Wrap atomico: ri-verifica delle dipendenze e delete in transazione.
+    // Previene race condition in cui una nuova segnalazione viene creata
+    // tra il count-check iniziale e la delete (P2003 FK violation).
+    try {
+      await db.$transaction(async (tx) => {
+        const segnalazioniCount = await tx.segnalazione.count({ where: { comuneId } });
+        if (segnalazioniCount > 0) {
+          throw new Error(`SEGNALAZIONI_COLLEGATE:${segnalazioniCount}`);
+        }
+        await tx.comune.delete({ where: { id: comuneId } });
+      });
+      return NextResponse.json({ ok: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("SEGNALAZIONI_COLLEGATE:")) {
+        const n = msg.split(":")[1];
+        return NextResponse.json(
+          { error: `Impossibile eliminare: il comune ha ${n} segnalazione/i collegate.` },
+          { status: 400 }
+        );
+      }
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+        return NextResponse.json(
+          { error: "Impossibile eliminare: una nuova dipendenza è stata creata concorrentemente. Ricarica la pagina e riprova." },
+          { status: 409 }
+        );
+      }
+      logger.error({ err: e }, "Errore eliminazione comune");
+      return NextResponse.json(
+        { error: "Errore interno del server" },
+        { status: 500 }
+      );
+    }
   } catch (e) {
     logger.error({ err: e }, "Errore eliminazione comune");
     return NextResponse.json(

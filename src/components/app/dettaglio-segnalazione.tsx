@@ -102,7 +102,11 @@ export function DettaglioSegnalazione({
 
   useEffect(() => {
     carica();
-     
+    // Dipendenza solo su id: carica cattura user dal closure ma user.id
+    // è stabile nella sessione. Se user cambia ruolo (es. aggiornamento
+    // dei permessi), è sufficiente navigare via e tornare per rieseguire
+    // il caricamento. eslint-disable per evitare warning.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   async function inviaInRevisione() {
@@ -114,8 +118,8 @@ export function DettaglioSegnalazione({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stato: "in_revisione" }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Errore sconosciuto");
       toast({ title: "Inviata in revisione", description: "Il referente territoriale riceverà la notifica" });
       await carica();
       onAggiornata();
@@ -131,8 +135,8 @@ export function DettaglioSegnalazione({
     try {
       guardDemoReadOnly(user);
       const res = await fetch(`/api/segnalazioni/${id}/approva`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Errore sconosciuto");
       toast({ title: "Approvata", description: "Ora puoi procedere con simulazione e invio PEC" });
       await carica();
       onAggiornata();
@@ -156,8 +160,8 @@ export function DettaglioSegnalazione({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ nota: notaRifiuto }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Errore sconosciuto");
       toast({ title: "Rifiutata", description: "La segnalazione è tornata al volontario con la tua nota" });
       setDialogRifiuto(false);
       setNotaRifiuto("");
@@ -175,8 +179,8 @@ export function DettaglioSegnalazione({
     try {
       guardDemoReadOnly(user);
       const res = await fetch(`/api/segnalazioni/${id}/simula-pec`, { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Errore sconosciuto");
       toast({
         title: data.emailInviata ? "Simulazione inviata" : "Simulazione registrata",
         description: `${data.messaggio}. Protocollo: ${data.numeroProtocollo}`,
@@ -220,8 +224,8 @@ export function DettaglioSegnalazione({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stato: nuovoStato, nota: notaCambio || null }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Errore sconosciuto");
       toast({ title: "Stato aggiornato", description: `Nuovo stato: ${labelStato(nuovoStato)}` });
       setDialogCambioStato(false);
       setNotaCambio("");
@@ -240,8 +244,8 @@ export function DettaglioSegnalazione({
     try {
       guardDemoReadOnly(user);
       const res = await fetch(`/api/segnalazioni/${id}`, { method: "DELETE" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Errore sconosciuto");
       toast({ title: "Bozza eliminata" });
       onBack();
     } catch (e) {
@@ -294,16 +298,17 @@ export function DettaglioSegnalazione({
     (isOwner && segnalazione.stato === "bozza") ||
     (isReviewer && ["bozza", "in_revisione"].includes(segnalazione.stato));
 
-  // Transizioni di stato lecite per lo stato corrente. Si calcola una
+  // Transizioni di stato lecite per lo stato corrente. Calcolate una
   // sola volta per render (invece di duplicare la lookup sia nel
-  // controllo di visibilità sia nell'onClick), così il ramo difensivo
-  // `?? []` è valutato una sola volta ed è coperto dai test che
-  // renderizzano il componente con stati non standard.
+  // controllo di visibilità sia nell'onClick): il ramo difensivo `?? []`
+  // viene valutato una sola volta ed è coperto dai test che renderizzano
+  // il componente con stati non standard.
   const transizioniDisponibili = TRANSIZIONI_LECITE[segnalazione.stato] ?? [];
 
-  // Estratto in variabile per garantire tracciabilità coverage del branch
-  // `?? "Bozza senza protocollo"` da parte di v8 (JSX inline a volte non
-  // viene rilevato correttamente).
+  // Estratto in variabile per garantire tracciabilità del branch di
+  // coverage `?? "Bozza senza protocollo"` da parte di v8 (le
+  // espressioni JSX inline a volte non vengono rilevate correttamente
+  // dallo strumento di coverage).
   const titoloProtocollo = segnalazione.numeroProtocollo ?? "Bozza senza protocollo";
   const classeStato = coloreStato(segnalazione.stato);
   const etichettaStato = labelStato(segnalazione.stato);
@@ -483,7 +488,7 @@ export function DettaglioSegnalazione({
                 <span className="font-medium">{segnalazione.nomeEsercizio}</span>
               </div>
             )}
-            {segnalazione.latitudine && segnalazione.longitudine && (
+            {segnalazione.latitudine != null && segnalazione.longitudine != null && (
               <div>
                 <span className="text-muted-foreground">Coordinate:</span>{" "}
                 <a

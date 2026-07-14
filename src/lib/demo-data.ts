@@ -104,7 +104,7 @@ export const DEMO_SEGNALAZIONI: Segnalazione[] = [
     id: "demo-4",
     stato: "inviata",
     // Formato YYYYMMGG a 8 cifre (12 maggio 2026, coerente con dataInvio).
-    numeroProtocollo: "20260512-EXA-EX-DM01",
+    numeroProtocollo: "20260512-REG-EX-DM01",
     indirizzoVia: "Via dell'Industria 5",
     chkLuceVersoAlto: true,
     chkAbbagliamento: true,
@@ -116,7 +116,7 @@ export const DEMO_SEGNALAZIONI: Segnalazione[] = [
     id: "demo-5",
     stato: "in_attesa",
     // Formato YYYYMMGG a 8 cifre (5 maggio 2026, coerente con dataInvio).
-    numeroProtocollo: "20260505-EXA-EX-DM01",
+    numeroProtocollo: "20260505-REG-EX-DM01",
     indirizzoVia: "Via del Porto 9",
     chkLuceIntrusiva: true,
     referenteApprovatoreId: "demo-referente",

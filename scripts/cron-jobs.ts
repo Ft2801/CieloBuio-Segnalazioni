@@ -15,6 +15,11 @@
  * La logica è centralizzata in `src/lib/cron-utils.ts` e condivisa con
  * `POST /api/reminder` (esecuzione manuale admin) per evitare drift.
  *
+ * Concurrency safety: acquisiamo un PostgreSQL advisory lock all'inizio
+ * per prevenire esecuzioni concorrenti (cron che si sovrappone a trigger
+ * manuale admin, o cron che riparte prima che la precedente finisca).
+ * Se il lock è già preso, lo script esce silenziosamente con codice 0.
+ *
  * Esempio cron (ogni giorno alle 3:00):
  *   0 3 * * * cd /path/to/project && npm run cron:reminder >> logs/cron.log 2>&1
  *
@@ -29,19 +34,51 @@ import {
   cleanupFileOrfani,
   getRetentionAnni,
 } from "../src/lib/cron-utils";
+import { logger } from "../src/lib/logger";
+
+// Chiave numerica per il PostgreSQL advisory lock. Deve essere stabile
+// tra release (non cambiarla senza considerare le esecuzioni concorrenti
+// in corso durante il deploy). 0x4349424F = "CIBO" in ASCII (mnemonico
+// per CieloBuio).
+const CRON_ADVISORY_LOCK_KEY = 0x4349424f;
 
 const db = new PrismaClient();
 
-async function main() {
-  console.log(`[${new Date().toISOString()}] Inizio cron jobs...`);
+/**
+ * Tenta di acquisire un advisory lock PostgreSQL. Ritorna true se
+ * acquisito, false se già preso da un'altra sessione. Usa
+ * pg_try_advisory_lock (non blocking) per evitare di attendere.
+ */
+async function tryAcquireLock(): Promise<boolean> {
+  const result = await db.$queryRaw<{ acquired: boolean }[]>`
+    SELECT pg_try_advisory_lock(${CRON_ADVISORY_LOCK_KEY}::bigint) AS acquired
+  `;
+  return result[0]?.acquired === true;
+}
+
+async function releaseLock(): Promise<void> {
+  try {
+    await db.$executeRaw`SELECT pg_advisory_unlock(${CRON_ADVISORY_LOCK_KEY}::bigint)`;
+  } catch (e) {
+    logger.warn({ err: e }, "[cron-jobs] Rilascio advisory lock fallito (sessione chiusa?)");
+  }
+}
+
+/**
+ * Funzione principale esportata per riuso nei test. Esegue la sequenza
+ * di maintenance senza side-effects di processo (exit, disconnect):
+ * quei side-effects sono gestiti dal wrapper main() sotto.
+ */
+export async function runCronJobs(): Promise<void> {
+  logger.info({ timestamp: new Date().toISOString() }, "Inizio cron jobs...");
 
   // 1. Pulizia sessioni scadute
   const sessioniPulite = await cleanupSessioniScadute(db);
-  console.log(`- Sessioni scadute rimosse: ${sessioniPulite}`);
+  logger.info({ count: sessioniPulite }, "Sessioni scadute rimosse");
 
   // 2. Transizione automatica inviata -> in_attesa dopo N giorni
   const transitate = await transizioneAutomaticaInviata(db, null);
-  console.log(`- Segnalazioni transitate inviata -> in_attesa: ${transitate}`);
+  logger.info({ count: transitate }, "Segnalazioni transitate inviata -> in_attesa");
 
   // 3. Anonimizzazione GDPR: segnalazioni più vecchie di RETENTION_SEGNALAZIONI_ANNI.
   // L'anonimizzazione rimuove i dati personali del volontario (lat/long,
@@ -58,7 +95,7 @@ async function main() {
   // dichiarato in PRIVACY.md.
   const retentionAnni = getRetentionAnni();
   const anonimizzate = await anonimizzaSegnalazioniGdpr(db, null);
-  console.log(`- Segnalazioni anonimizzate (retention ${retentionAnni} anni): ${anonimizzate}`);
+  logger.info({ count: anonimizzate, retentionAnni }, "Segnalazioni anonimizzate per GDPR retention");
 
   // 4. Pulizia file orfani in /storage/uploads
   // I file fisici degli allegati vengono cancellati durante l'anonimizzazione
@@ -70,17 +107,38 @@ async function main() {
   // tabella allegati e rimuove gli orfani.
   const orfaniRimossi = await cleanupFileOrfani(db);
   if (orfaniRimossi > 0) {
-    console.log(`- File orfani rimossi da storage/uploads/: ${orfaniRimossi}`);
+    logger.info({ count: orfaniRimossi }, "File orfani rimossi da storage/uploads/");
   }
 
-  console.log(`[${new Date().toISOString()}] Cron jobs completati.`);
+  logger.info({ timestamp: new Date().toISOString() }, "Cron jobs completati.");
 }
 
-main()
-  .catch((e) => {
-    console.error("Errore cron jobs:", e);
-    process.exit(1);
-  })
-  .finally(async () => {
+async function main(): Promise<void> {
+  // Acquisisci advisory lock per prevenire esecuzioni concorrenti.
+  // pg_try_advisory_lock ritorna immediatamente false se il lock è già
+  // preso: in quel caso usciamo senza errori (la precedente esecuzione
+  // sta ancora girando).
+  const lockAcquired = await tryAcquireLock();
+  if (!lockAcquired) {
+    logger.info("[cron-jobs] Un'altra esecuzione è già in corso (advisory lock occupato). Uscita.");
+    return;
+  }
+  try {
+    await runCronJobs();
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function run() {
+  try {
+    await main();
+  } catch (e) {
+    logger.error({ err: e }, "Errore cron jobs");
     await db.$disconnect();
-  });
+    process.exit(1);
+  }
+  await db.$disconnect();
+}
+
+run();

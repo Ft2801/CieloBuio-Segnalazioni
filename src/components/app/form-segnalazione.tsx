@@ -107,12 +107,33 @@ export function FormSegnalazione({
     livelloRecidiva: number;
   } | null>(null);
 
+  // ID della segnalazione creata dal "Salva e continua a modificare":
+  // tracciato localmente perché il prop segnalazioneId non cambia dopo
+  // una POST. Questo stato rende disponibile l'ID appena generato per
+  // le operazioni successive (upload allegati) senza uscire dalla pagina.
+  const [createdId, setCreatedId] = useState<string | null>(null);
+  const effectiveSegnalazioneId = segnalazioneId ?? createdId;
+
   // Carica dettaglio se in modifica
   useEffect(() => {
     if (!segnalazioneId) return;
+    // In demo mode, leggiamo i dati della segnalazione dalla lib demo-mode
+    // invece di chiamare l'API (che non è disponibile senza server).
+    if (isDemoSession(user)) {
+      // Demo mode: la demo non supporta modifica di segnalazioni esistenti,
+      // mostriamo solo il form vuoto (come nuova segnalazione).
+      setCaricamento(false);
+      return;
+    }
     setCaricamento(true);
     fetch(`/api/segnalazioni/${segnalazioneId}`)
-      .then((r) => r.json().catch(() => ({})))
+      .then(async (r) => {
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new Error(data.error ?? "Errore caricamento segnalazione");
+        }
+        return r.json().catch(() => ({}));
+      })
       .then((data) => {
         const s = data.segnalazione;
         if (!s) return;
@@ -140,15 +161,27 @@ export function FormSegnalazione({
         setMittenteVisibile(s.mittenteVisibile);
         setAllegati(s.allegati ?? []);
       })
+      .catch((e) => {
+        toast({
+          title: "Errore caricamento",
+          description: e instanceof Error ? e.message : "Errore sconosciuto",
+          variant: "destructive",
+        });
+      })
       .finally(() => setCaricamento(false));
-  }, [segnalazioneId]);
+  }, [segnalazioneId, user, toast]);
 
   // Carica segnalazione precedente se presente (recidiva)
   useEffect(() => {
     if (!segnalazionePrecedenteId) return;
+    if (isDemoSession(user)) return;
     fetch(`/api/segnalazioni/${segnalazionePrecedenteId}`)
-      .then((r) => r.json().catch(() => ({})))
+      .then(async (r) => {
+        if (!r.ok) return null;
+        return r.json().catch(() => ({}));
+      })
       .then((data) => {
+        if (!data) return;
         const s = data.segnalazione;
         if (!s) return;
         setSegnalazionePrecedente({
@@ -166,7 +199,7 @@ export function FormSegnalazione({
         setNomeEsercizio(s.nomeEsercizio ?? "");
       })
       .catch(console.error);
-  }, [segnalazionePrecedenteId]);
+  }, [segnalazionePrecedenteId, user]);
 
   // Carica comuni (con ricerca e debounce 300ms)
   const debounceComuneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -191,48 +224,71 @@ export function FormSegnalazione({
       .catch(console.error);
   }, [debouncedSearchComune]);
 
-  // Quando seleziona un comune, aggiorna cap/destinatario
+  // Quando seleziona un comune, aggiorna cap/destinatario/oggetto.
+  // La ricerca comune potrebbe filtrare fuori il comune selezionato
+  // dalla lista visibile, ma conserviamo comunque l'oggetto Comune
+  // tracciato esplicitamente in comuneSelezionato (impostato nel
+  // callback onClick della lista, non derivato da comuni.find qui).
+  // I campi PEC (oggetto, testo introduttivo, destinatario) vengono
+  // precompilati solo se l'utente non li ha già modificati a mano:
+  // il guard `!field` preserva le modifiche utente quando cambia comune.
   useEffect(() => {
-    if (comuneId) {
-      const c = comuni.find((x) => x.id === comuneId);
-      setComuneSelezionato(c ?? null);
-      if (c) {
-        if (!cap) setCap(c.cap);
-        if (!destinatarioNome && c.nomeSindaco) {
-          setDestinatarioNome(`Sindaco ${c.nomeSindaco}`);
-        }
-        if (!oggettoPec) {
-          setOggettoPec(
-            `Segnalazione impianto di illuminazione non conforme - ${c.nome} (${c.provincia.sigla})`
-          );
-        }
-        if (!testoIntroduttivoPec) {
-          setTestoIntroduttivoPec(
-            "Si segnala la presenza di un impianto di illuminazione non conforme alle disposizioni di legge in vigore."
-          );
-        }
-      }
-    } else {
+    if (!comuneId) {
       setComuneSelezionato(null);
+      return;
     }
-     
-  }, [comuneId, comuni]);
+    // Se abbiamo già un comune selezionato tracciato, usiamo quello.
+    // Altrimenti cerchiamo nella lista visibile (utile per il caricamento
+    // iniziale di una segnalazione in modifica dove il comune era già
+    // impostato: in quel caso la lista potrebbe non contenerlo, e il
+    // comuneSelezionato resta null finché l'utente non cerca/seleziona).
+    if (comuneSelezionato && comuneSelezionato.id === comuneId) {
+      return;
+    }
+    const c = comuni.find((x) => x.id === comuneId);
+    if (c) {
+      setComuneSelezionato(c);
+      if (!cap) setCap(c.cap);
+      if (!destinatarioNome && c.nomeSindaco) {
+        setDestinatarioNome(`Sindaco ${c.nomeSindaco}`);
+      }
+      if (!oggettoPec) {
+        setOggettoPec(
+          `Segnalazione impianto di illuminazione non conforme - ${c.nome} (${c.provincia.sigla})`
+        );
+      }
+      if (!testoIntroduttivoPec) {
+        setTestoIntroduttivoPec(
+          "Si segnala la presenza di un impianto di illuminazione non conforme alle disposizioni di legge in vigore."
+        );
+      }
+    }
+    // Dipendenze limitate a comuneId e comuneSelezionato per mantenere
+    // l'effetto focalizzato sulla selezione del comune e non rieseguirlo
+    // ad ogni cambio della lista comuni (soggetta a debounce di ricerca).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comuneId, comuneSelezionato]);
 
   // GPS
+  const [gpsLoading, setGpsLoading] = useState(false);
   function rilevaGPS() {
     if (!navigator.geolocation) {
       toast({ title: "GPS non disponibile", variant: "destructive" });
       return;
     }
+    setGpsLoading(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setLatitudine(pos.coords.latitude);
         setLongitudine(pos.coords.longitude);
         toast({ title: "Posizione rilevata", description: `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}` });
+        setGpsLoading(false);
       },
       (err) => {
         toast({ title: "Errore GPS", description: err.message, variant: "destructive" });
-      }
+        setGpsLoading(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   }
 
@@ -271,8 +327,8 @@ export function FormSegnalazione({
         // livelloRecidiva NON viene inviato dal client: il server lo calcola
         // server-side in base alla segnalazione precedente collegata.
       };
-      const url = segnalazioneId ? `/api/segnalazioni/${segnalazioneId}` : "/api/segnalazioni";
-      const method = segnalazioneId ? "PUT" : "POST";
+      const url = effectiveSegnalazioneId ? `/api/segnalazioni/${effectiveSegnalazioneId}` : "/api/segnalazioni";
+      const method = effectiveSegnalazioneId ? "PUT" : "POST";
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
@@ -280,6 +336,11 @@ export function FormSegnalazione({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "Errore salvataggio");
+      // Traccia l'ID della segnalazione appena creata per consentire
+      // l'upload di allegati senza uscire dalla pagina.
+      if (data.segnalazione?.id && !effectiveSegnalazioneId) {
+        setCreatedId(data.segnalazione.id);
+      }
       toast({ title: "Segnalazione salvata", description: "Bozza aggiornata con successo" });
       if (esci && data.segnalazione?.id) {
         onSaved(data.segnalazione.id);
@@ -300,24 +361,25 @@ export function FormSegnalazione({
       toast({ title: "Azione non disponibile", description: DEMO_READONLY_MESSAGE, variant: "destructive" });
       return;
     }
-    if (!segnalazioneId) {
+    if (!effectiveSegnalazioneId) {
       toast({ title: "Salva prima la bozza", description: "Salva la segnalazione prima di caricare allegati", variant: "destructive" });
       return;
     }
     // Validazione client-side dimensione (10 MB) per evitare upload lunghi
-    // che falliscono lato server con errore opaco.
+    // che falliscono lato server con errore opaco. Il messaggio usa la
+    // costante MAX_ALLEGATO_BYTE per restare coerente se il limite cambia.
     const MAX_FILE_SIZE = MAX_ALLEGATO_BYTE;
     if (file.size > MAX_FILE_SIZE) {
       toast({
         title: "File troppo grande",
-        description: `Dimensione massima 10 MB. Il file selezionato è di ${(file.size / 1024 / 1024).toFixed(2)} MB.`,
+        description: `Dimensione massima ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(0)} MB. Il file selezionato è di ${(file.size / 1024 / 1024).toFixed(2)} MB.`,
         variant: "destructive",
       });
       return;
     }
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("segnalazioneId", segnalazioneId);
+    formData.append("segnalazioneId", effectiveSegnalazioneId);
     formData.append("tipo", file.type.startsWith("image/") ? "foto" : "documento");
     try {
       const res = await fetch("/api/upload", { method: "POST", body: formData });
@@ -455,6 +517,25 @@ export function FormSegnalazione({
                       }`}
                       onClick={() => {
                         setComuneId(c.id);
+                        // Traccia esplicitamente il comune selezionato:
+                        // quando l'utente cerca un altro comune, il
+                        // filtering di `comuni` non azzererà la selezione.
+                        setComuneSelezionato(c);
+                        // Precompila cap/destinatario/oggetto dal comune.
+                        if (!cap) setCap(c.cap);
+                        if (!destinatarioNome && c.nomeSindaco) {
+                          setDestinatarioNome(`Sindaco ${c.nomeSindaco}`);
+                        }
+                        if (!oggettoPec) {
+                          setOggettoPec(
+                            `Segnalazione impianto di illuminazione non conforme - ${c.nome} (${c.provincia.sigla})`
+                          );
+                        }
+                        if (!testoIntroduttivoPec) {
+                          setTestoIntroduttivoPec(
+                            "Si segnala la presenza di un impianto di illuminazione non conforme alle disposizioni di legge in vigore."
+                          );
+                        }
                         setSearchComune("");
                       }}
                     >
@@ -509,8 +590,8 @@ export function FormSegnalazione({
             </div>
           </div>
 
-          <Button type="button" variant="outline" size="sm" onClick={rilevaGPS}>
-            <Crosshair className="w-4 h-4 mr-1" /> Rileva posizione GPS
+          <Button type="button" variant="outline" size="sm" onClick={rilevaGPS} disabled={gpsLoading}>
+            <Crosshair className="w-4 h-4 mr-1" /> {gpsLoading ? "Rilevazione in corso…" : "Rileva posizione GPS"}
           </Button>
         </CardContent>
       </Card>

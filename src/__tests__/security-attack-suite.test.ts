@@ -852,7 +852,7 @@ describe("[GDPR] Anonimizzazione automatica", () => {
   });
 
   it("retention usa dataChiusura (non updatedAt) per calcolare la finestra GDPR (ispezione sorgente)", () => {
-    // Bug logico critico: updatedAt si aggiorna ad ogni modifica del record,
+    // Coerenza semantica: updatedAt si aggiorna ad ogni modifica del record,
     // posticipando falsamente la retention. La retention deve usare
     // dataChiusura, registrato quando lo stato transita a chiusa_*.
     const src = readSrc("src/lib/cron-utils.ts");
@@ -869,9 +869,9 @@ describe("[GDPR] Anonimizzazione automatica", () => {
   });
 
   it("segnalazionePrecedenteId è una vera foreign key con onDelete: SetNull (ispezione sorgente)", () => {
-    // Bug integrità referenziale: era un semplice String? senza vincolo.
-    // Ora è una relazione Prisma con onDelete: SetNull per evitare
-    // dangling reference se la segnalazione precedente viene eliminata.
+    // Integrità referenziale garantita dalla relazione Prisma con
+    // onDelete: SetNull, che evita dangling reference se la segnalazione
+    // precedente viene eliminata.
     const src = readSrc("prisma/schema.prisma");
     expect(src).toMatch(/segnalazionePrecedente\s+Segnalazione\?\s+@relation/);
     expect(src).toContain("onDelete: SetNull");

@@ -19,13 +19,33 @@ import {
   canViewSegnalazione,
   hasTerritorialCompetence,
 } from "@/lib/auth";
-import { segnalazionePecSchema, validaPecCcAggiuntive, validate } from "@/lib/validation";
+import { segnalazionePecSchema, validaPecCcAggiuntive, validate, capSchema } from "@/lib/validation";
 import { isSafePathSegment, UPLOADS_ROOT } from "@/lib/path-guard";
 import { rm } from "fs/promises";
 import path from "path";
 import { logger } from "@/lib/logger";
+import { z } from "zod";
 
 type Params = { params: Promise<{ id: string }> };
+
+// Selezione esplicita dei campi utente da restituire per volontario e
+// referenteApprovatore. ESCLUDE passwordHash, totpSecret e totpVerifiedAt
+// che NON devono mai essere trasmessi al client (nemmeno al volontario
+// proprietario della segnalazione).
+const USER_SELECT = {
+  select: {
+    id: true,
+    nomeCognome: true,
+    email: true,
+    provinciaId: true,
+    regioneId: true,
+    inizialiProtocollo: true,
+    pec: true,
+    emailOrdinaria: true,
+    indirizzo: true,
+    firma: true,
+  },
+} as const;
 
 export async function GET(_req: NextRequest, { params }: Params) {
   const user = await getSessionUser();
@@ -40,8 +60,9 @@ export async function GET(_req: NextRequest, { params }: Params) {
       comune: true,
       provincia: { include: { regione: true } },
       regione: true,
-      volontario: true,
-      referenteApprovatore: true,
+      // select esplicita: esclude passwordHash, totpSecret, totpVerifiedAt
+      volontario: USER_SELECT,
+      referenteApprovatore: { select: { id: true, nomeCognome: true, email: true } },
       allegati: true,
       storicoStati: {
         orderBy: { timestamp: "asc" },
@@ -61,7 +82,13 @@ export async function GET(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
-  return NextResponse.json({ segnalazione });
+  // Impedisci caching della risposta (contiene PII del volontario):
+  // un cache hit in un proxy intermedio potrebbe servire i dati di un
+  // utente a un altro. private=no-store è la policy più restrittiva.
+  return NextResponse.json(
+    { segnalazione },
+    { headers: { "Cache-Control": "private, no-store" } }
+  );
 }
 
 export async function PUT(req: NextRequest, { params }: Params) {
@@ -90,7 +117,8 @@ export async function PUT(req: NextRequest, { params }: Params) {
   }
 
   // Il volontario proprietario può modificare solo in stato "bozza".
-  // In "in_revisione" solo il referente può modificare (fix minori).
+  // In "in_revisione" solo il referente può modificare (modifiche testuali
+  // alla segnalazione durante la fase di revisione).
   if (isOwner && segnalazione.stato !== "bozza") {
     return NextResponse.json(
       { error: "Il volontario può modificare la segnalazione solo in stato bozza" },
@@ -129,29 +157,72 @@ export async function PUT(req: NextRequest, { params }: Params) {
     const pecCcAggiuntiveNormalized =
       ccValidation.emails.length > 0 ? ccValidation.emails.join("; ") : null;
 
-    // provinciaId, regioneId, cap derivano SEMPRE dal comune associato,
+    // provinciaId, regioneId derivano SEMPRE dal comune associato,
     // mai dal body. Questo previene che un volontario (via chiamata API
     // diretta) assegni la segnalazione a una provincia/regione diversa da
     // quella del comune reale, alterando il routing PEC e la competenza
     // territoriale.
     let provinciaId = segnalazione.provinciaId;
     let regioneId = segnalazione.regioneId;
-    let cap = segnalazione.cap;
     let destinatarioNome = body.destinatarioNome !== undefined ? pecValidation.data.destinatarioNome : segnalazione.destinatarioNome;
 
-    if (body.comuneId && body.comuneId !== segnalazione.comuneId) {
+    // Gestione comuneId: supporta null esplicito (annulla associazione)
+    // e validazione numero. Number(null) restituirebbe 0, che non esiste
+    // come ID (autoincrement da 1), quindi gestiamo null esplicitamente.
+    let comuneIdValue: number | null | undefined = undefined; // undefined = mantieni esistente
+    if (body.comuneId !== undefined) {
+      if (body.comuneId === null) {
+        comuneIdValue = null;
+      } else {
+        const parsedComune = z.number().int().min(1).safeParse(body.comuneId);
+        if (!parsedComune.success) {
+          return NextResponse.json(
+            { error: "comuneId non valido (deve essere un intero positivo o null)" },
+            { status: 400 }
+          );
+        }
+        comuneIdValue = parsedComune.data;
+      }
+    }
+
+    // CAP: validato tramite capSchema (5 cifre) quando fornito dal body.
+    // Se non fornito, viene derivato dal comune (sotto) o mantenuto esistente.
+    let cap: string | null = segnalazione.cap;
+    if (typeof body.cap === "string" && body.cap.trim() !== "") {
+      const capResult = capSchema.safeParse(body.cap.trim());
+      if (!capResult.success) {
+        return NextResponse.json(
+          { error: capResult.error.issues[0]?.message ?? "CAP non valido" },
+          { status: 400 }
+        );
+      }
+      cap = capResult.data;
+    } else if (body.cap === null) {
+      cap = null;
+    }
+
+    if (comuneIdValue !== undefined && comuneIdValue !== null && comuneIdValue !== segnalazione.comuneId) {
       const comune = await db.comune.findUnique({
-        where: { id: Number(body.comuneId) },
+        where: { id: comuneIdValue },
         include: { provincia: { include: { regione: true } } },
       });
       if (comune) {
-        cap = cap || comune.cap;
+        // Quando il comune cambia, deriviamo cap, provincia e regione
+        // dal nuovo comune SOLO se il body non ha fornito un CAP esplicito.
+        // Lasciamo il CAP fornito dall'utente vincere sul default del comune.
+        if (typeof body.cap !== "string" || body.cap.trim() === "") {
+          cap = comune.cap;
+        }
         provinciaId = comune.provinciaId;
         regioneId = comune.provincia.regioneId;
         if (!destinatarioNome && comune.nomeSindaco) {
           destinatarioNome = `Sindaco ${comune.nomeSindaco}`;
         }
       }
+    } else if (comuneIdValue === null) {
+      // Comune rimosso: azzera anche provincia/regione associate.
+      provinciaId = null;
+      regioneId = null;
     }
 
     // Validazione range latitudine/longitudine nei valori geografici reali.
@@ -179,11 +250,17 @@ export async function PUT(req: NextRequest, { params }: Params) {
       );
     }
 
-    const aggiornata = await db.segnalazione.update({
-      where: { id },
+    // Race-condition prevention: usiamo updateMany con clausola WHERE
+    // sullo stato atteso (catturato prima dell'edit). Se lo stato è
+    // cambiato concorrentemente, count=0 e rispondiamo 409 Conflict
+    // invece di applicare l'edit su una segnalazione che dovrebbe essere
+    // immutabile.
+    const expectedStato = segnalazione.stato;
+    const result = await db.segnalazione.updateMany({
+      where: { id, stato: expectedStato },
       data: {
         indirizzoVia: typeof body.indirizzoVia === "string" ? body.indirizzoVia.trim().slice(0, 500) : segnalazione.indirizzoVia,
-        comuneId: body.comuneId !== undefined ? Number(body.comuneId) : segnalazione.comuneId,
+        comuneId: comuneIdValue !== undefined ? comuneIdValue : segnalazione.comuneId,
         cap,
         provinciaId,
         regioneId,
@@ -209,11 +286,36 @@ export async function PUT(req: NextRequest, { params }: Params) {
         pecCcAggiuntive: body.pecCcAggiuntive !== undefined ? pecCcAggiuntiveNormalized : segnalazione.pecCcAggiuntive,
         oggettoPec: body.oggettoPec !== undefined ? pecValidation.data.oggettoPec : segnalazione.oggettoPec,
         testoIntroduttivoPec: body.testoIntroduttivoPec !== undefined ? pecValidation.data.testoIntroduttivoPec : segnalazione.testoIntroduttivoPec,
-        mittenteVisibile: body.mittenteVisibile !== undefined ? !!body.mittenteVisibile : segnalazione.mittenteVisibile,
+        mittenteVisibile: body.mittenteVisibile !== undefined
+          ? !(body.mittenteVisibile === false || body.mittenteVisibile === "false")
+          : segnalazione.mittenteVisibile,
+      },
+    });
+    if (result.count === 0) {
+      return NextResponse.json(
+        { error: "La segnalazione è stata modificata concorrentemente. Ricarica la pagina." },
+        { status: 409 }
+      );
+    }
+
+    // Rileggi la segnalazione aggiornata per restituirla (updateMany non
+    // ritorna il record, solo il count).
+    const aggiornata = await db.segnalazione.findUnique({
+      where: { id },
+      include: {
+        comune: true,
+        provincia: { include: { regione: true } },
+        regione: true,
+        volontario: USER_SELECT,
+        referenteApprovatore: { select: { id: true, nomeCognome: true, email: true } },
+        allegati: true,
       },
     });
 
-    return NextResponse.json({ segnalazione: aggiornata });
+    return NextResponse.json(
+      { segnalazione: aggiornata },
+      { headers: { "Cache-Control": "private, no-store" } }
+    );
   } catch (e) {
     logger.error({ err: e }, "Errore aggiornamento segnalazione");
     return NextResponse.json(
@@ -264,12 +366,13 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
   // Pulizia fisica degli allegati e della directory della segnalazione.
   // Eseguiamo in background per non bloccare la risposta, e ignoriamo
   // gli errori (il DB è già stato aggiornato; eventuali file orfani
-  // saranno rimossi manualmente dall'admin, vedi nota nel cron-jobs.ts).
+  // saranno rimossi dal cron cleanupFileOrfani).
   //
   // L'ID della segnalazione è validato come segmento di path sicuro
-  // (nessun `..`, `/`, `\`, `\0`) prima di essere usato in path.join,
-  // per difesa in profondità coerente con path-guard.ts usato in tutte
-  // le altre route che manipolano file di allegati.
+  // (nessun `..`, `/`, `\`, `\0`, caratteri di controllo) prima di
+  // essere usato in path.join, per difesa in profondità coerente
+  // con path-guard.ts. Il path risultante viene verificato
+  // esplicitamente dentro UPLOADS_ROOT come ulteriore defense-in-depth.
   // Gli allegati reali sono in storage/uploads/ (directory PRIVATA,
   // fuori da public/), non in public/uploads/ che è vuota/legacy.
   void (async () => {

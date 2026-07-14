@@ -298,7 +298,10 @@ export async function POST(req: NextRequest) {
             segnalazioneId,
             tipo,
             urlStorage,
-            nomeOriginale: file.name,
+            // Limite difensivo sulla lunghezza del nome originale: alcuni
+            // filesystem e client possono inviare nomi molto lunghi che
+            // sforzerebbero il campo VARCHAR del DB o il display nella UI.
+            nomeOriginale: file.name.slice(0, 255),
           },
         });
       });

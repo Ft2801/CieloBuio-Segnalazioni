@@ -31,7 +31,7 @@ describe("POST /api/auth/logout", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.ok).toBe(true);
-    expect(db.sessione.deleteMany).toHaveBeenCalledWith({ where: { token: "tok" } });
+    expect(db.sessione.deleteMany).toHaveBeenCalledWith({ where: { token: "1a7674eb4ee78df7e1ac439a93c3fa8e3c945784d4dec9fd8e3011738b2f1d62" } });
   });
 
   it("ritorna ok anche senza token (no-op)", async () => {

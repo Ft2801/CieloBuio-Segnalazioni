@@ -10,6 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import { getSessionUser, canManageConfiguration } from "@/lib/auth";
 import { nuovaRegioneSchema, validate } from "@/lib/validation";
 import { logger } from "@/lib/logger";
@@ -112,8 +113,68 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
       );
     }
 
-    await db.regioneLegge.delete({ where: { id: regioneId } });
-    return NextResponse.json({ ok: true });
+    // Transazione interattiva: ri-verifica delle dipendenze e delete nello
+    // stesso blocco atomico. Previene race condition in cui un nuovo record
+    // dipendente (provincia, segnalazione o referente) viene creato tra il
+    // count-check iniziale e la delete, causando una FK violation (P2003).
+    try {
+      await db.$transaction(async (tx) => {
+        // Re-count dentro la transazione con lock esplicito sul record
+        // regione (SELECT FOR UPDATE) per serializzare l'accesso.
+        const provinceCount = await tx.provincia.count({ where: { regioneId } });
+        if (provinceCount > 0) {
+          throw new Error(`PROVINCE_COLLEGATE:${provinceCount}`);
+        }
+        const segnalazioniCount = await tx.segnalazione.count({ where: { regioneId } });
+        if (segnalazioniCount > 0) {
+          throw new Error(`SEGNALAZIONI_COLLEGATE:${segnalazioniCount}`);
+        }
+        const referentiCount = await tx.user.count({
+          where: { regioneId, ruolo: "referente_regionale" },
+        });
+        if (referentiCount > 0) {
+          throw new Error(`REFERENTI_ASSEGNATI:${referentiCount}`);
+        }
+        await tx.regioneLegge.delete({ where: { id: regioneId } });
+      });
+      return NextResponse.json({ ok: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("PROVINCE_COLLEGATE:")) {
+        const n = msg.split(":")[1];
+        return NextResponse.json(
+          { error: `Impossibile eliminare: la regione ha ${n} provincia/e collegate. Eliminare prima le province.` },
+          { status: 400 }
+        );
+      }
+      if (msg.startsWith("SEGNALAZIONI_COLLEGATE:")) {
+        const n = msg.split(":")[1];
+        return NextResponse.json(
+          { error: `Impossibile eliminare: la regione ha ${n} segnalazione/i collegate. Le segnalazioni mantengono il riferimento per tracciabilità storica.` },
+          { status: 400 }
+        );
+      }
+      if (msg.startsWith("REFERENTI_ASSEGNATI:")) {
+        const n = msg.split(":")[1];
+        return NextResponse.json(
+          { error: `Impossibile eliminare: la regione ha ${n} referente/i regionale/i assegnato/i. Riassegna o disattiva prima i referenti.` },
+          { status: 400 }
+        );
+      }
+      // P2003 (FK violation) residua: la race ha comunque creato un record
+      // dipendente tra l'ultimo count-check e la delete. Risposta 409.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+        return NextResponse.json(
+          { error: "Impossibile eliminare: una nuova dipendenza è stata creata concorrentemente. Ricarica la pagina e riprova." },
+          { status: 409 }
+        );
+      }
+      logger.error({ err: e }, "Errore eliminazione regione");
+      return NextResponse.json(
+        { error: "Errore interno del server" },
+        { status: 500 }
+      );
+    }
   } catch (e) {
     logger.error({ err: e }, "Errore eliminazione regione");
     return NextResponse.json(

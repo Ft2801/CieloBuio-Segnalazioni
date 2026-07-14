@@ -50,6 +50,7 @@ model Provincia {
   updatedAt             DateTime @updatedAt
 
   @@map("province")
+  @@index([regioneId])
 }
 
 model Comune {
@@ -65,7 +66,11 @@ model Comune {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
+  // Vincolo di unicità: previene duplicati reali (stesso nome comune nella
+  // stessa provincia). I comuni omonimi in province diverse restano ammessi.
+  @@unique([nome, provinciaId])
   @@map("comuni")
+  @@index([provinciaId])
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +104,11 @@ model User {
   // con successo il primo codice TOTP. Il login richiede il 2FA solo se
   // ENTRAMBI totpSecret e totpVerifiedAt sono valorizzati.
   totpVerifiedAt    DateTime?
+  // Ultimo timestep TOTP usato con successo per il login (anti-replay,
+  // RFC 6238 §5.2). Aggiornato a ogni login 2FA riuscito. Un nuovo
+  // tentativo con timestep <= questo valore viene rifiutato, impedendo
+  // il riuso dello stesso codice entro la finestra di validità.
+  totpLastUsedTimestep Int?
   inizialiProtocollo String? // Es. "DB" - usate nel numero di protocollo
   attivo            Boolean  @default(true)
   provincia         Provincia? @relation(fields: [provinciaId], references: [id])
@@ -110,7 +120,13 @@ model User {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
+  // Indici sulle colonne più usate nei filtri del pannello admin
+  // (ricerca per ruolo e per territorio) per evitare full table scan.
   @@map("users")
+  @@index([ruolo])
+  @@index([provinciaId])
+  @@index([regioneId])
+  @@index([attivo])
 }
 
 model Sessione {
@@ -220,9 +236,11 @@ model Segnalazione {
   @@index([volontarioId])
   @@index([provinciaId])
   @@index([regioneId])
+  @@index([comuneId])
   @@index([stato])
   @@index([dataInvio])
   @@index([dataChiusura])
+  @@index([segnalazionePrecedenteId])
 }
 
 model Allegato {
@@ -256,6 +274,7 @@ model StoricoStato {
   @@map("storico_stati")
   @@index([segnalazioneId])
   @@index([userId])
+  @@index([timestamp])
 }
 
 // ---------------------------------------------------------------------------
@@ -278,4 +297,6 @@ model LogInvioPec {
 
   @@map("log_invii_pec")
   @@index([segnalazioneId])
+  @@index([timestamp])
+  @@index([esito])
 }

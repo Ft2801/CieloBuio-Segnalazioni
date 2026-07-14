@@ -10,6 +10,7 @@ import { db } from "@/lib/db";
 import { getSessionUser, canReviewSegnalazioni, hasTerritorialCompetence } from "@/lib/auth";
 import { parseUrlStorageSicuro, risolviPathAllegatoSicuro } from "@/lib/path-guard";
 import { unlink } from "fs/promises";
+import { logger } from "@/lib/logger";
 
 export async function DELETE(req: NextRequest) {
   const user = await getSessionUser();
@@ -76,19 +77,44 @@ export async function DELETE(req: NextRequest) {
     );
   }
 
+  // Elimina PRIMA il record DB, poi il file fisico: in caso di fallimento
+  // del filesystem, il DB resta consistente e il cron cleanupFileOrfani
+  // rimuoverà il file residuo in un secondo momento.
   // L4: path traversal protection centralizzata in path-guard.ts.
+  //
+  // deleteMany con clausola WHERE su stato in STATI_MODIFICABILI:
+  // verifica atomica che lo stato sia ancora modificabile al momento
+  // della cancellazione. Previene race condition in cui lo stato cambia
+  // concorrentemente (es. approvata) tra la lettura iniziale e la DELETE,
+  // che permetterebbe di eliminare allegati da una pratica "congelata".
+  // count=0 indica che l'allegato non esiste più o lo stato è cambiato.
+  const deleteResult = await db.allegato.deleteMany({
+    where: {
+      id,
+      segnalazione: { stato: { in: STATI_MODIFICABILI } },
+    },
+  });
+  if (deleteResult.count === 0) {
+    return NextResponse.json(
+      { error: "Allegato non trovato o segnalazione non più modificabile" },
+      { status: 404 }
+    );
+  }
+
   const parsed = parseUrlStorageSicuro(allegato.urlStorage);
   if (parsed && parsed.segnalazioneId === allegato.segnalazioneId) {
     const filePath = risolviPathAllegatoSicuro(parsed.segnalazioneId, parsed.filename);
     if (filePath) {
       try {
         await unlink(filePath);
-      } catch {
-        // Se il file non esiste, ignora
+      } catch (e) {
+        // Se il file non esiste (ENOENT), ignora: è già stato rimosso.
+        // Altri errori (permessi, I/O) vengono loggati come warning per
+        // dare visibilità: il cron cleanupFileOrfani ripulirà in seguito.
+        logger.warn({ err: e, filePath, allegatoId: id }, "Errore non bloccante durante eliminazione file allegato");
       }
     }
   }
 
-  await db.allegato.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

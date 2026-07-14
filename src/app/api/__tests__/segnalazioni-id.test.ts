@@ -21,8 +21,8 @@ vi.mock("fs/promises", () => ({
   readFile: vi.fn().mockResolvedValue(Buffer.from("")),
 }));
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  const mockDb = {
     segnalazione: {
       findUnique: vi.fn(),
       findMany: vi.fn(),
@@ -40,10 +40,16 @@ vi.mock("@/lib/db", () => ({
     },
     sessione: {
       findUnique: vi.fn(),
-      delete: vi.fn(),
+      delete: vi.fn().mockResolvedValue({}),
     },
-  },
-}));
+    $transaction: vi.fn(),
+  };
+  mockDb.$transaction.mockImplementation(async (cb) => {
+    if (typeof cb === "function") return cb(mockDb);
+    return Promise.all(cb);
+  });
+  return { db: mockDb };
+});
 
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
@@ -157,7 +163,10 @@ describe("GET /api/segnalazioni/[id]", () => {
 });
 
 describe("PUT /api/segnalazioni/[id]", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(db.segnalazione.updateMany).mockResolvedValue({ count: 1 });
+  });
 
   it("ritorna 401 se non autenticato", async () => {
     mockSession(null);
@@ -206,13 +215,12 @@ describe("PUT /api/segnalazioni/[id]", () => {
     expect(json.error).toContain("solo in stato bozza");
   });
 
-  it("permette al referente di modificare in stato in_revisione (fix minori)", async () => {
+  it("permette al referente di modificare in stato in_revisione (modifiche testuali)", async () => {
     mockSession(REF_PROV_SESSION);
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
       id: "s1", volontarioId: "u-vol", provinciaId: 5, regioneId: 1, stato: "in_revisione",
     } as any);
     vi.mocked(db.comune.findUnique).mockResolvedValue(null);
-    vi.mocked(db.segnalazione.update).mockResolvedValue({ id: "s1" } as any);
     const res = await PUT(makeReq("PUT", { oggettoPec: "Oggetto", testoIntroduttivoPec: "", destinatarioNome: "Sindaco", pecCcAggiuntive: "" }), { params: Promise.resolve({ id: "s1" }) });
     expect(res.status).toBe(200);
   });
@@ -275,16 +283,26 @@ describe("PUT /api/segnalazioni/[id]", () => {
 
   it("modifica con successo ritorna 200 (volontario sulla propria bozza)", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
-      id: "s1", volontarioId: "u-vol", provinciaId: 1, regioneId: 1, stato: "bozza",
-      comuneId: 1, cap: "24040", latitudine: null, longitudine: null,
-      indirizzoVia: "Via Vecchia", nomeEsercizio: null,
-      pecCcAggiuntive: null, oggettoPec: null, testoIntroduttivoPec: null,
-      destinatarioNome: null,
-    } as any);
-    vi.mocked(db.segnalazione.update).mockResolvedValue({
-      id: "s1", nomeEsercizio: "Bar Roma",
-    } as any);
+    vi.mocked(db.segnalazione.findUnique)
+      .mockResolvedValueOnce({
+        id: "s1", volontarioId: "u-vol", provinciaId: 1, regioneId: 1, stato: "bozza",
+        comuneId: 1, cap: "24040", latitudine: null, longitudine: null,
+        indirizzoVia: "Via Vecchia", nomeEsercizio: null,
+        pecCcAggiuntive: null, oggettoPec: null, testoIntroduttivoPec: null,
+        destinatarioNome: null,
+      } as any)
+      .mockResolvedValueOnce({
+        id: "s1", volontarioId: "u-vol", provinciaId: 1, regioneId: 1, stato: "bozza",
+        comuneId: 1, cap: "24040", latitudine: null, longitudine: null,
+        indirizzoVia: "Via Nuova 1", nomeEsercizio: "Bar Roma",
+        pecCcAggiuntive: null, oggettoPec: null, testoIntroduttivoPec: null,
+        destinatarioNome: null,
+        comune: { id: 1, nome: "Comune", pecComune: "pec@comune.it", nomeSindaco: "Sindaco" },
+        provincia: { id: 1, sigla: "BG", nome: "Bergamo" },
+        regione: { id: 1, regione: "Lombardia" },
+        volontario: { id: "u-vol", nomeCognome: "Volontario", email: "vol@t.it" },
+        allegati: [],
+      } as any);
     const res = await PUT(makeReq("PUT", { nomeEsercizio: "Bar Roma", indirizzoVia: "Via Nuova 1" }), { params: Promise.resolve({ id: "s1" }) });
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -300,7 +318,6 @@ describe("PUT /api/segnalazioni/[id]", () => {
       pecCcAggiuntive: null, oggettoPec: null, testoIntroduttivoPec: null,
       destinatarioNome: null,
     } as any);
-    vi.mocked(db.segnalazione.update).mockResolvedValue({ id: "s1" } as any);
     const res = await PUT(makeReq("PUT", { nomeEsercizio: "X" }), { params: Promise.resolve({ id: "s1" }) });
     expect(res.status).toBe(200);
   });
@@ -319,16 +336,15 @@ describe("PUT /api/segnalazioni/[id]", () => {
       provincia: { regioneId: 3, regione: { id: 3, regione: "LOMBARDIA" } },
       nomeSindaco: "Mario Rossi",
     } as any);
-    vi.mocked(db.segnalazione.update).mockResolvedValue({ id: "s1" } as any);
     await PUT(makeReq("PUT", { comuneId: 2 }), { params: Promise.resolve({ id: "s1" }) });
-    expect(db.segnalazione.update).toHaveBeenCalledWith(expect.objectContaining({
+    expect(db.segnalazione.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "s1", stato: "bozza" },
       data: expect.objectContaining({
         comuneId: 2,
         provinciaId: 7,
         regioneId: 3,
-        // Il cap viene mantenuto da quello esistente se già presente
-        // (logica `cap = cap || comune.cap` nel route).
-        cap: "24040",
+        // Il cap viene derivato dal nuovo comune
+        cap: "24100",
       }),
     }));
   });
@@ -342,7 +358,7 @@ describe("PUT /api/segnalazioni/[id]", () => {
       pecCcAggiuntive: null, oggettoPec: null, testoIntroduttivoPec: null,
       destinatarioNome: null,
     } as any);
-    vi.mocked(db.segnalazione.update).mockRejectedValue(new Error("DB error"));
+    vi.mocked(db.segnalazione.updateMany).mockRejectedValue(new Error("DB error"));
     const res = await PUT(makeReq("PUT", { nomeEsercizio: "X" }), { params: Promise.resolve({ id: "s1" }) });
     expect(res.status).toBe(500);
   });
@@ -454,7 +470,6 @@ describe("PUT /api/segnalazioni/[id] - edge cases per copertura rami", () => {
       pecCcAggiuntive: null, oggettoPec: null, testoIntroduttivoPec: null,
       destinatarioNome: null,
     } as any);
-    vi.mocked(db.segnalazione.update).mockResolvedValue({ id: "s1" } as any);
     await PUT(makeReq("PUT", {
       chkVetroPianoInclinato: true,
       chkVetroCurvo: true,
@@ -473,7 +488,8 @@ describe("PUT /api/segnalazioni/[id] - edge cases per copertura rami", () => {
       testoIntroduttivoPec: "Testo intro",
       mittenteVisibile: true,
     }), { params: Promise.resolve({ id: "s1" }) });
-    expect(db.segnalazione.update).toHaveBeenCalledWith(expect.objectContaining({
+    expect(db.segnalazione.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "s1", stato: "bozza" },
       data: expect.objectContaining({
         chkVetroPianoInclinato: true,
         chkVetroCurvo: true,
@@ -502,9 +518,9 @@ describe("PUT /api/segnalazioni/[id] - edge cases per copertura rami", () => {
       comuneId: 1, cap: "24040", latitudine: null, longitudine: null,
       indirizzoVia: "Via 1",
     } as any);
-    vi.mocked(db.segnalazione.update).mockResolvedValue({ id: "s1" } as any);
     await PUT(makeReq("PUT", { latitudine: 45.5, longitudine: 9.6 }), { params: Promise.resolve({ id: "s1" }) });
-    expect(db.segnalazione.update).toHaveBeenCalledWith(expect.objectContaining({
+    expect(db.segnalazione.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "s1", stato: "bozza" },
       data: expect.objectContaining({ latitudine: 45.5, longitudine: 9.6 }),
     }));
   });
@@ -521,10 +537,10 @@ describe("PUT /api/segnalazioni/[id] - edge cases per copertura rami", () => {
       provincia: { regioneId: 3, regione: { id: 3, regione: "LOMBARDIA" } },
       nomeSindaco: "Mario Rossi",
     } as any);
-    vi.mocked(db.segnalazione.update).mockResolvedValue({ id: "s1" } as any);
     await PUT(makeReq("PUT", { comuneId: 2 }), { params: Promise.resolve({ id: "s1" }) });
     // cap esistente è "" (falsy) → usa comune.cap = "24100"
-    expect(db.segnalazione.update).toHaveBeenCalledWith(expect.objectContaining({
+    expect(db.segnalazione.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "s1", stato: "bozza" },
       data: expect.objectContaining({ cap: "24100" }),
     }));
   });

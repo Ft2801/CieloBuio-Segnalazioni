@@ -5,8 +5,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  const mockDb = {
     allegato: {
       findMany: vi.fn(),
       deleteMany: vi.fn(),
@@ -17,8 +17,14 @@ vi.mock("@/lib/db", () => ({
     storicoStato: {
       create: vi.fn(),
     },
-  },
-}));
+    $transaction: vi.fn(),
+  };
+  mockDb.$transaction.mockImplementation(async (cb) => {
+    if (typeof cb === "function") return cb(mockDb);
+    return Promise.all(cb);
+  });
+  return { db: mockDb };
+});
 
 vi.mock("@/lib/logger", () => ({
   logger: {

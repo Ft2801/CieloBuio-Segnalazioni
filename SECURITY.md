@@ -1,6 +1,6 @@
 # Sicurezza
 
-Il progetto CieloBuio Segnalazioni è stato sottoposto a un audit di sicurezza metodico e completo sull'intero codebase. Una suite di **80 test di sicurezza informatica** (`src/__tests__/security-attack-suite.test.ts`) verifica l'efficacia delle difese contro i vettori di attacco OWASP Top 10. Questa pagina documenta le misure implementate, i test di sicurezza eseguiti e le responsabilità operative.
+Il progetto CieloBuio Segnalazioni è stato sottoposto a un audit di sicurezza metodico e completo sull'intero codebase. Una suite di **75 test di sicurezza informatica** (`src/__tests__/security-attack-suite.test.ts`) verifica l'efficacia delle difese contro i vettori di attacco OWASP Top 10. Questa pagina documenta le misure implementate, i test di sicurezza eseguiti e le responsabilità operative.
 
 ## Misure di sicurezza implementate
 
@@ -56,7 +56,9 @@ Tutti gli endpoint `/api/segnalazioni/[id]/*` verificano che l'utente abbia diri
 
 - **HTML escaping** di tutti i contenuti generati dall'utente nella lettera PEC (testo, descrizione libera, nome originale degli allegati)
 - **Escaping defense-in-depth** per i campi interpolati fuori dal `<pre>` principale in `generaHtmlLettera`: `pecArpaRegionale`, `numeroProtocollo` vengono escapati con `escapeHtml`
-- **Content-Security-Policy** strict: `default-src 'self'; script-src 'self'; frame-ancestors 'none'`
+- **Content-Security-Policy** strict su script-src: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'`. La direttiva `style-src 'self' 'unsafe-inline'` è necessaria per Next.js (inietta stili inline per idratazione); `script-src 'self'` blocca tutti gli script inline ed esterni non provenienti dallo stesso origin
+- **CSP esplicita sulla route lettera HTML**: defense-in-depth oltre al middleware, con `script-src 'none'` per bloccare ogni esecuzione di script nella pagina di anteprima della lettera PEC
+- **Cache-Control: private, no-store** su `/api/auth/me`, `/api/auth/login` e `/api/segnalazioni/[id]` per prevenire cache hit cross-user in proxy intermedi
 - **X-Content-Type-Options: nosniff** su tutte le risposte
 - **Validazione input** con zod su tutti gli endpoint di creazione/modifica
 
@@ -82,9 +84,14 @@ L'export CSV (`/api/segnalazioni/export`) sanifica ogni campo che inizia con `=`
 
 Lo script `scripts/backup-db.ts` esporta le tabelle in JSON con redazione dei dati sensibili:
 - `user.passwordHash` è escluso dal backup (resta solo nel DB attivo)
+- `user.totpSecret` e `user.totpVerifiedAt` sono esclusi dal backup (impediscono rigenerazione di codici 2FA offline dalla copia di backup)
 - `sessione.token` è troncato a 8 caratteri con suffisso `...REDACTED`
 - I file fisici degli allegati (`storage/uploads/`) vengono copiati nel backup per un ripristino completo
+- Symlink traversal protection: lo script usa `lstat` invece di `stat` e verifica il `realpath` di ogni file per prevenire path traversal via symlink malevoli nel storage
+- File size limit 500 MB per singolo file: previene OOM del processo di backup su file anomali
 - La directory di backup (`backups/`) è esclusa dal repository (`.gitignore`) e va protetta a livello di filesystem sul server di produzione
+- La chiave di cifratura (`BACKUP_ENCRYPTION_KEY`) è una stringa Base64 di 32 byte (256 bit) generata con `openssl rand -base64 32`, va conservata in un password manager o KMS separato dal backup
+- Lo script di ripristino `scripts/restore-db.ts` richiede `--force` per sovrascrivere DB non vuoti (fail-safe contro restore accidentali)
 
 ### File upload sicuro
 
@@ -102,12 +109,14 @@ Lo script `scripts/backup-db.ts` esporta le tabelle in JSON con redazione dei da
 ### Header di sicurezza globali
 
 Tutte le risposte includono via middleware:
-- `Content-Security-Policy: default-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'`
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'`
 - `Strict-Transport-Security: max-age=63072000; includeSubDomains` (non include `preload` per evitare lock-in permanente HTTPS)
 - `X-Frame-Options: DENY`
 - `X-Content-Type-Options: nosniff`
 - `Referrer-Policy: strict-origin-when-cross-origin`
 - `Permissions-Policy: camera=(), microphone=(), geolocation=(self), interest-cohort=()`
+
+Inoltre, Caddy aggiunge defense-in-depth al proxy level (CSP di base, X-Frame-Options, Permissions-Policy) anche per gli asset statici esclusi dal matcher del middleware, e un `request_body max_size 50MB` per prevenire DoS via upload massivi.
 - `X-Powered-By` disabilitato (`poweredByHeader: false` in `next.config.ts`)
 
 ### Rate limiting
@@ -176,7 +185,7 @@ Tutte le risposte includono via middleware:
 
 In produzione verificare:
 - `NODE_ENV=production` (disabilita Prisma query logging, stack trace dettagliati)
-- `next start` (non `next dev`)
+- `npm run start` (equivale a `NODE_ENV=production node .next/standalone/server.js`, non `next dev`)
 - `NEXT_PUBLIC_BASE_URL` configurato (per verifica Origin anti-CSRF, fail-closed se mancante)
 - `PEC_SMTP_*` configurati (per invio PEC e notifiche reali)
 - HTTPS terminato dal reverse proxy (Caddy) con certificato valido
@@ -198,7 +207,7 @@ Il progetto include una suite di **75 test di sicurezza** in `src/__tests__/secu
 | A05: Security Misconfiguration | 9 | CSP strict, HSTS, X-Frame-Options DENY, nosniff, CSRF Origin/Referer, fail-closed senza BASE_URL, poweredByHeader false (ispezione next.config) |
 | A07: Authentication Failures | 9 | Brute force escalation, session fixation (rotation + invalidazione admin), rate limit doppio IP+email, timing side-channel mitigation (sentinel hash), TOTP gate nel login |
 | A08: Software/Data Integrity | 10 | Path traversal centralizzato in `path-guard.ts`, parseUrlStorageSicuro (formato attuale e legacy), isSafePathSegment (`..`/`/`/`\\`/`\0`), isValidCuid, randomUUID filename, validazione CUID in upload, coerenza route gemelle, magic bytes (JPEG/WebP), limite 4 allegati centralizzato in types.ts, size max 10MB centralizzato |
-| A09: Logging/Monitoring | 4 | Audit trail (storico stati), export CSV con filtro territoriale, eventi automatici cron con userId=null, logger Pino strutturato al posto di `console.*` in 16 route API |
+| A09: Logging/Monitoring | 4 | Audit trail (storico stati), export CSV con filtro territoriale, eventi automatici cron con userId=null, logger Pino strutturato al posto di `console.*` in 19 route API |
 | A10: SSRF | 2 | Scansione sorgente per `fetch(body.*)` e `http.get(body.*)`, verifica nodemailer usa env non input utente |
 | XSS | 2 | HTML escaping in `generaHtmlLettera`, scansione componenti per `dangerouslySetInnerHTML` |
 | Demo Mode | 2 | Blocco azioni mutative, `isDemoSession` type checking |

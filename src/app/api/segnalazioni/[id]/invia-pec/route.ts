@@ -20,7 +20,7 @@ import { db } from "@/lib/db";
 import { getSessionUser, canSendPec, hasTerritorialCompetence } from "@/lib/auth";
 import { generaNumeroProtocollo } from "@/lib/protocollo";
 import { notificaPecInviata } from "@/lib/notifiche";
-import { checkRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit, resetRateLimit } from "@/lib/rate-limit";
 import { buildLetteraContextFromSegnalazione, generaTestoLettera } from "@/lib/lettera";
 import { parseUrlStorageSicuro, risolviPathAllegatoSicuro } from "@/lib/path-guard";
 import { readFile } from "fs/promises";
@@ -146,8 +146,9 @@ export async function POST(_req: NextRequest, { params }: Params) {
   }
 
   // Mittente: obbligatorio. Se manca sia PEC_FROM sia user.pec, nodemailer
-  // restituirebbe un errore generico.
-  const fromAddress = process.env.PEC_FROM ?? user.pec;
+  // restituirebbe un errore generico. Usiamo || invece di ?? perché una
+  // stringa vuota in PEC_FROM va trattata come "non configurata".
+  const fromAddress = process.env.PEC_FROM || user.pec;
   if (!fromAddress) {
     return NextResponse.json(
       { error: "Mittente PEC non configurato. Imposta PEC_FROM nel file .env o assegna una PEC all'utente." },
@@ -244,6 +245,12 @@ export async function POST(_req: NextRequest, { params }: Params) {
   });
 
   if (esito === "errore") {
+    // Reset del rate limit per l'utente: l'errore SMTP è transient
+    // (network blip, SMTP server down, autenticazione temporaneamente
+    // fallita), non un abuso. Senza questo reset, 5 errori SMTP
+    // consecutivi bloccherebbero l'utente per 1 ora, impedendo di
+    // ritentare l'invio PEC una volta risolto il problema di infrastruttura.
+    resetRateLimit(`pec:${user.id}`);
     // M4: non rivelare dettagli SMTP al client; l'errore è nel log DB
     return NextResponse.json(
       { error: "Errore durante l'invio della PEC. Il dettaglio è registrato nei log di sistema. Contatta l'amministrazione se il problema persiste." },

@@ -38,7 +38,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 // Mock di useToast: alcuni figli di AppShell lo usano, ma nei test diretti
-// di VistaReminder/Dashboard/ListaSegnalazioni non e richiamato. Lo si
+// di VistaReminder/Dashboard/ListaSegnalazioni non è richiamato. Lo si
 // mocka comunque per sicurezza in caso di rendering transitivo.
 vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({
@@ -250,7 +250,7 @@ afterEach(() => {
 import { VistaReminder } from "@/components/app/vista-reminder";
 
 describe("VistaReminder", () => {
-  it("mostra stato di caricamento quando data e null", () => {
+  it("mostra stato di caricamento quando data è null", () => {
     mockFetch.mockReturnValue(new Promise(() => {})); // mai risolta
     render(
       <VistaReminder user={creaUser()} onBack={vi.fn()} onApriDettaglio={vi.fn()} />
@@ -350,7 +350,7 @@ describe("VistaReminder", () => {
     expect(screen.getAllByText("n/d").length).toBeGreaterThan(0);
   });
 
-  it("non mostra il badge numeroProtocollo quando questo e null", async () => {
+  it("non mostra il badge numeroProtocollo quando questo è null", async () => {
     const seg = creaSegnalazione({
       id: "s5",
       stato: "in_attesa",
@@ -404,7 +404,7 @@ describe("VistaReminder", () => {
     expect(onApri).toHaveBeenCalledWith("s-click-btn");
   });
 
-  it("usa aria-label con id quando numeroProtocollo e null", async () => {
+  it("usa aria-label con id quando numeroProtocollo è null", async () => {
     const seg = creaSegnalazione({
       id: "s-aria",
       stato: "in_attesa",
@@ -472,7 +472,7 @@ describe("Dashboard", () => {
     render(<Dashboard user={creaUser()} onNavigate={vi.fn()} />);
     expect(screen.getByText(/Benvenuto, Mario Rossi/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Nuova segnalazione/i })).toBeInTheDocument();
-    // Cards mostrano 0 quando stats e null (piu di una card con 0)
+    // Cards mostrano 0 quando stats è null (più di una card con 0)
     expect(screen.getAllByText("0").length).toBeGreaterThan(0);
   });
 
@@ -596,7 +596,7 @@ describe("Dashboard", () => {
       // DEMO_STATS.totali = 5
       expect(screen.getByText("5")).toBeInTheDocument();
     });
-    // Banner overdue mostrato perche DEMO_STATS.inAttesaOverdue = 1
+    // Banner overdue mostrato perché DEMO_STATS.inAttesaOverdue = 1
     expect(screen.getByText(/1 pratiche in attesa da oltre 30 giorni/i)).toBeInTheDocument();
     expect(mockFetch).not.toHaveBeenCalled();
   });
@@ -724,7 +724,7 @@ describe("ListaSegnalazioni", () => {
     expect(screen.getByText(/1 segnalazione/i)).toBeInTheDocument();
   });
 
-  it("usa indirizzoVia come titolo quando nomeEsercizio e null", async () => {
+  it("usa indirizzoVia come titolo quando nomeEsercizio è null", async () => {
     const seg = creaSegnalazione({
       id: "ls2",
       stato: "bozza",
@@ -1431,7 +1431,7 @@ describe("AppShell", () => {
       refresh: vi.fn(),
     });
     // I figli reali (Dashboard, ListaSegnalazioni, VistaReminder) chiamano
-    // fetch quando user non e demo. Si fornisce una risposta di default
+    // fetch quando user non è demo. Si fornisce una risposta di default
     // sicura (payload vuoto) per evitare "Cannot read 'then' of undefined".
     if (user && !(typeof user === "object" && "isDemo" in user && (user as { isDemo?: unknown }).isDemo === true)) {
       mockFetch.mockResolvedValue(okResponse({
@@ -1452,7 +1452,7 @@ describe("AppShell", () => {
     expect(container.querySelector("aside")).not.toBeInTheDocument();
   });
 
-  it("renderizza LoginScreen quando user e null", () => {
+  it("renderizza LoginScreen quando user è null", () => {
     setUser(null, false);
     render(<AppShell />);
     expect(screen.getByText("CieloBuio")).toBeInTheDocument();
@@ -1795,7 +1795,7 @@ describe("AppShell", () => {
     const user = userEvent.setup();
     setUser(creaUser({ ruolo: "referente_provinciale" }));
     render(<AppShell />);
-    // Per referente_provinciale la voce Amministrazione non e visibile:
+    // Per referente_provinciale la voce Amministrazione non è visibile:
     // si forza la vista admin via il mockState dell'AppShell navigando
     // attraverso il flusso valido (Promemoria) e si verifica che la
     // renderizzazione condizionale protegga la vista admin.

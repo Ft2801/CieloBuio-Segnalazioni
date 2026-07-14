@@ -55,7 +55,7 @@ const ctxBase: LetteraContext = {
 };
 
 describe("generaTestoLettera - rami flag false e ARPA", () => {
-  it("con tutti i flag false, mostra placeholder 'nessuna tipologia' e 'nessun problema'", () => {
+  it("con tutti i flag false, mostra placeholder 'nessuna tipologià e 'nessun problema'", () => {
     const ctx: LetteraContext = {
       ...ctxBase,
       chkVetroPianoInclinato: false,
@@ -267,8 +267,8 @@ describe("buildLetteraContextFromSegnalazione - comune null", () => {
     } as any);
 
     const ctx = await buildLetteraContextFromSegnalazione("s2");
-    // destinatarioNome null e comune null -> "Sindaco " (con nomeSindaco vuoto)
-    expect(ctx.destinatarioNome).toBe("Sindaco ");
+    // destinatarioNome null e comune null -> "Sindaco" (con nomeSindaco vuoto)
+    expect(ctx.destinatarioNome).toBe("Sindaco");
   });
 
   it("provincia null: provinciaSigla è stringa vuota (ramo ??)", async () => {

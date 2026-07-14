@@ -31,10 +31,10 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: 'npm'
@@ -77,3 +77,4 @@ jobs:
           name: coverage-report
           path: coverage/
           retention-days: 30
+          if-no-files-found: warn

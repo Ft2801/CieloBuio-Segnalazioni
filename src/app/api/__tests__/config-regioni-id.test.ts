@@ -6,8 +6,8 @@ import { NextRequest } from "next/server";
 
 vi.mock("next/headers", () => ({ cookies: vi.fn() }));
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  const mockDb = {
     regioneLegge: {
       findUnique: vi.fn(),
       update: vi.fn(),
@@ -15,9 +15,16 @@ vi.mock("@/lib/db", () => ({
     },
     provincia: { count: vi.fn() },
     user: { count: vi.fn() },
-    sessione: { findUnique: vi.fn(), delete: vi.fn() },
-  },
-}));
+    segnalazione: { count: vi.fn().mockResolvedValue(0) },
+    sessione: { findUnique: vi.fn(), delete: vi.fn().mockResolvedValue({}) },
+    $transaction: vi.fn(),
+  };
+  mockDb.$transaction.mockImplementation(async (cb) => {
+    if (typeof cb === "function") return cb(mockDb);
+    return Promise.all(cb);
+  });
+  return { db: mockDb };
+});
 
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";

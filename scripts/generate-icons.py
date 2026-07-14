@@ -18,7 +18,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 PUBLIC_DIR = os.path.join(PROJECT_ROOT, "public")
 
-def crea_png_png(width, height, pixels):
+def crea_png(width, height, pixels):
     """Crea un file PNG grezzo da una matrice di pixel RGB."""
     def chunk(tipo, dati):
         c = tipo + dati
@@ -109,7 +109,7 @@ def genera_icona(size):
             else:
                 pixels.append(bg)
     
-    return crea_png_png(size, size, pixels)
+    return crea_png(size, size, pixels)
 
 # Genera le icone (path relativi alla root del progetto, non più hardcoded)
 os.makedirs(PUBLIC_DIR, exist_ok=True)

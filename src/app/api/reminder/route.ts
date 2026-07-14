@@ -32,10 +32,9 @@ import {
   cleanupSessioniScadute,
   transizioneAutomaticaInviata,
   anonimizzaSegnalazioniGdpr,
+  getReminderGiorni,
+  getTransizioneGiorni,
 } from "@/lib/cron-utils";
-
-const SOGLIA_REMINDER_GIORNI_DEFAULT = 30;
-const TRANSIZIONE_INVIATA_GIORNI_DEFAULT = 7;
 
 export async function GET(req: NextRequest) {
   const user = await getSessionUser();
@@ -43,10 +42,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
-  const sogliaGiorni = Number(process.env.REMINDER_GIORNI ?? SOGLIA_REMINDER_GIORNI_DEFAULT);
-  const transizioneGiorni = Number(
-    process.env.TRANSIZIONE_INVIATA_GIORNI ?? TRANSIZIONE_INVIATA_GIORNI_DEFAULT
-  );
+  // Validatori centralizzati in cron-utils: prevengono NaN su valori malformati
+  // nel .env (es. REMINDER_GIORNI=abc), che produrrebbero Invalid Date e query
+  // rotte. Stesso comportamento del cron automatico.
+  const sogliaGiorni = getReminderGiorni();
+  const transizioneGiorni = getTransizioneGiorni();
 
   // Lista pratiche in attesa oltre soglia (solo lettura)
   const sogliaDate = new Date();
@@ -82,12 +82,15 @@ export async function GET(req: NextRequest) {
     take: 100,
   });
 
-  return NextResponse.json({
-    sogliaGiorni,
-    transizioneGiorni,
-    count: pratiche.length,
-    pratiche,
-  });
+  return NextResponse.json(
+    {
+      sogliaGiorni,
+      transizioneGiorni,
+      count: pratiche.length,
+      pratiche,
+    },
+    { headers: { "Cache-Control": "private, no-store" } }
+  );
 }
 
 export async function POST(req: NextRequest) {

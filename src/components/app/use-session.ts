@@ -92,9 +92,14 @@ export function useSession() {
       setUser(null);
       return;
     }
-    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {
+    await fetch("/api/auth/logout", { method: "POST" }).catch((e: unknown) => {
       // Se il server non risponde, la sessione locale viene comunque
       // azzerata: l'utente non resta bloccato in uno stato "loggato" fantasma.
+      // Logghiamo l'errore solo in development per diagnostica, senza
+      // disturbare l'utente con un toast (il logout client-side è riuscito).
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[use-session] Logout server-side fallito (sessione locale comunque azzerata):", e);
+      }
     });
     setUser(null);
   }, []);

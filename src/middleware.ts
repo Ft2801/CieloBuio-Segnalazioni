@@ -107,11 +107,21 @@ export function isOriginAllowed(val: string | null, expected: string, isProd: bo
   try {
     const u = new URL(val);
     if (u.origin === expected) return true;
-    if (!isProd && (u.host === "localhost:3000" || u.host === "127.0.0.1:3000")) return true;
+    // In dev accettiamo esplicitamente localhost come origine legittima
+    // (HMR, test locali). Usiamo match ESATTO sull'host (non includes)
+    // per evitare che URL come "https://evil.com/?localhost:3000" passino
+    // il check (includes restituirebbe true perché la stringa contiene
+    // "localhost:3000" come substring).
+    if (!isProd && DEV_HOSTS.includes(u.host)) return true;
+    if (!isProd && !u.host && DEV_HOSTS.includes(val)) return true;
     return false;
   } catch {
-    // URL malformato: fallback a match stringa (solo per expected, mai per localhost in prod)
-    return val === expected || (!isProd && DEV_HOSTS.some((o) => val.includes(o)));
+    // URL malformato: fallback a match stringa ESATTO (non includes)
+    // per evitare bypass via substring. In dev accettiamo solo se il
+    // valore corrisponde esattamente a uno dei DEV_HOSTS.
+    if (val === expected) return true;
+    if (!isProd && DEV_HOSTS.includes(val)) return true;
+    return false;
   }
 }
 

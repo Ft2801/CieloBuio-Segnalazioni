@@ -9,42 +9,72 @@
 # 2. Assicurati che le porte 80 e 443 del server siano raggiungibili da
 #    internet (necessarie per l'emissione automatica del certificato).
 # 3. L'app Next.js (vedi package.json -> "start") deve essere in esecuzione
-#    su localhost:3000 (di norma gestita da systemd o da un process manager,
-#    vedi SETUP.md).
+#    sull'indirizzo indicato dalla variabile d'ambiente UPSTREAM_HOST
+#    (di norma gestita da systemd o da un process manager, vedi SETUP.md).
+#
+# L'upstream è configurabile via variabile d'ambiente UPSTREAM_HOST per
+# supportare entrambi i deploy senza editare il file:
+# - Bare-metal (systemd): UPSTREAM_HOST=localhost:3000 (default)
+# - Docker Compose: UPSTREAM_HOST=app:3000 (il nome del service in
+#   docker-compose.yml è risolto dalla rete Docker interna).
 #
 # Per un ambiente di staging/anteprima su sotto-dominio, duplica il blocco
 # cambiando solo l'indirizzo e il "reverse_proxy" (usa un'altra porta se
 # esegui una seconda istanza dell'app in parallelo).
 
 segnalazioni.esempio.it {
-        # Redirige automaticamente http:// verso https:// (comportamento di
-        # default di Caddy, esplicitato qui per chiarezza).
-        reverse_proxy localhost:3000 {
+        # Caddy reindirizza automaticamente HTTP -> HTTPS per i siti con
+        # nome dominio (comportamento di default), non serve direttiva
+        # redir esplicita.
+
+        # L'upstream è letto da env: {$UPSTREAM_HOST} restituisce "localhost:3000"
+        # se la variabile non è impostata (deploy bare-metal di default),
+        # altrimenti il valore configurato (es. "app:3000" in Docker Compose).
+        reverse_proxy {$UPSTREAM_HOST:localhost:3000} {
                 header_up Host {host}
+                # X-Forwarded-For viene riscritto da Caddy con il remote_host
+                # reale (NON dal valore client-supplied), prevenendo spoofing.
                 header_up X-Forwarded-For {remote_host}
                 header_up X-Forwarded-Proto {scheme}
+                # X-Real-IP usato dall'app per il rate limiting per-IP:
+                # preferito rispetto a X-Forwarded-For perché non concatenable.
                 header_up X-Real-IP {remote_host}
         }
 
-        # Header di sicurezza aggiuntivi a livello di proxy (in aggiunta a
-        # quelli già impostati dall'app in src/middleware.ts e next.config.ts).
+        # Header di sicurezza a livello di proxy (defense-in-depth oltre
+        # al middleware Next.js). Applicati anche agli asset statici che
+        # il matcher del middleware potrebbe escludere.
         header {
+                # HSTS: max-age 2 anni con includeSubDomains. Non include
+                # preload per evitare lock-in permanente del dominio.
                 Strict-Transport-Security "max-age=63072000; includeSubDomains"
                 X-Content-Type-Options "nosniff"
+                X-Frame-Options "DENY"
                 Referrer-Policy "strict-origin-when-cross-origin"
+                Permissions-Policy "camera=(), microphone=(), geolocation=(self), interest-cohort=()"
+                # CSP di base: defense-in-depth. L'app imposta una CSP più
+                # specifica via middleware, ma in caso di regressioni sul
+                # matcher questa blocca comunque gli attacchi più comuni.
+                Content-Security-Policy "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
         }
 
         # Compressione delle risposte (riduce il traffico su hosting economici
         # con banda limitata, coerente col vincolo di basso costo del progetto).
         encode gzip zstd
 
-        # Log di accesso in formato JSON, utile per diagnosi senza dover
-        # installare strumenti aggiuntivi.
+        # Limite dimensione body per mitigare DoS via upload massivi. L'app
+        # valida i singoli allegati a 10 MB, ma un limite anche al proxy
+        # previene richieste multipart enormi che saturebbero la memoria
+        # dell'app prima della validazione.
+        request_body {
+                max_size 50MB
+        }
+
+        # Log di accesso in formato JSON. In Docker, output su stdout per
+        # essere raccolto dal driver di logging di Docker (con rotation).
+        # In bare-metal, file con rotation.
         log {
-                output file /var/log/caddy/cielobuio-access.log {
-                        roll_size 10MB
-                        roll_keep 5
-                }
+                output stdout
                 format json
         }
 }

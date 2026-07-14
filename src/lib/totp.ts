@@ -53,15 +53,50 @@ export function generateTotpUri(userEmail: string, secretBase32: string): string
 
 /**
  * Verifica un codice TOTP fornito dall'utente.
- * Ritorna true se il codice è valido per la finestra temporale corrente.
+ * Ritorna l'oggetto { valid, delta } dove `delta` è lo scostamento
+ * della finestra temporale (0 = step corrente, -1 = step precedente,
+ * +1 = step successivo). `delta` è necessario al chiamante per
+ * implementare la protezione anti-replay (RFC 6238 §5.2 richiede
+ * che il server rigetti tentativi di riusare lo stesso codice).
+ *
+ * La finestra è ±1 step (30 secondi) per tollerare clock drift tra
+ * client e server, come raccomandato da RFC 6238.
  */
-export function verifyTotp(token: string, secretBase32: string): boolean {
-  if (!secretBase32 || !token) return false;
+export function verifyTotpWithDelta(
+  token: string,
+  secretBase32: string
+): { valid: true; delta: number } | { valid: false } {
+  if (!secretBase32 || !token) return { valid: false };
   try {
     const totp = createTotp("", secretBase32);
     const delta = totp.validate({ token: token.trim(), window: 1 });
-    return delta !== null;
+    if (delta === null) return { valid: false };
+    return { valid: true, delta };
   } catch {
-    return false;
+    return { valid: false };
   }
+}
+
+/**
+ * Verifica un codice TOTP fornito dall'utente.
+ * Ritorna true se il codice è valido per la finestra temporale corrente.
+ *
+ * Nota: questa funzione NON implementa protezione anti-replay. Per
+ * prevenire il riuso dello stesso codice (RFC 6238 §5.2), il chiamante
+ * deve usare `verifyTotpWithDelta` e registrare il timestep usato
+ * per ogni utente, rifiutando verifiche con timestep <= ultimo usato.
+ * L'integrazione con il DB è gestita in src/app/api/auth/2fa/route.ts
+ * e src/app/api/auth/login/route.ts.
+ */
+export function verifyTotp(token: string, secretBase32: string): boolean {
+  return verifyTotpWithDelta(token, secretBase32).valid;
+}
+
+/**
+ * Calcola il timestep (counter) TOTP corrispondente a un timestamp
+ * e a un delta di finestra. Usato dal chiamante per registrare
+ * l'ultimo timestep usato e implementare la protezione anti-replay.
+ */
+export function computeTotpTimestep(date: Date, delta: number): number {
+  return Math.floor(date.getTime() / 1000 / PERIOD) + delta;
 }

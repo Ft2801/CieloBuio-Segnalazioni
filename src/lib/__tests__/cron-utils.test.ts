@@ -17,6 +17,11 @@ vi.mock("@/lib/path-guard", () => ({
   UPLOADS_ROOT: "/fake/uploads",
   isSafePathSegment: (v: string) =>
     !!v && typeof v === "string" && !v.includes("..") && !v.includes("/") && !v.includes("\\") && !v.includes("\0"),
+  parseUrlStorageSicuro: (url: string) => {
+    const parts = url.split("/");
+    if (parts.length === 2) return { segnalazioneId: parts[0], filename: parts[1] };
+    return null;
+  },
 }));
 
 // Mock gdpr per evitare chain

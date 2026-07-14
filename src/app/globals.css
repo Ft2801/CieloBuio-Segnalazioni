@@ -25,6 +25,7 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -45,9 +46,9 @@
 
 /* Tema CieloBuio: product register, restrained strategy.
    Colore primario: indaco profondo (richiama il cielo notturno senza
-   cadere nel clich del "dark + accent verde acido"). Neutri con leggera
+   cadere nel cliché del "dark + accent verde acido"). Neutri con leggera
    tinta indaco per coesione col brand. Tutte le superfici sono leggibili
-   ad alta densit (dashboard amministrativa) e funzionano in light mode. */
+   ad alta densità (dashboard amministrativa) e funzionano in light mode. */
 :root {
   --radius: 0.5rem;
 
@@ -76,6 +77,7 @@
 
   /* Semantici */
   --destructive: oklch(0.55 0.22 25);
+  --destructive-foreground: oklch(0.98 0.005 260);
   --border: oklch(0.88 0.01 260);
   --input: oklch(0.92 0.012 260);
   --ring: oklch(0.55 0.13 264);
@@ -86,7 +88,7 @@
   --chart-4: oklch(0.55 0.20 350);
   --chart-5: oklch(0.65 0.16 145);
 
-  /* Sidebar: layer leggermente pi scuro per gerarchia visiva */
+  /* Sidebar: layer leggermente più scuro per gerarchia visiva */
   --sidebar: oklch(0.97 0.01 260);
   --sidebar-foreground: oklch(0.20 0.02 260);
   --sidebar-primary: oklch(0.42 0.13 264);
@@ -97,7 +99,7 @@
   --sidebar-ring: oklch(0.55 0.13 264);
 }
 
-/* Dark mode: layer di elevazione via luminosit, non shadow.
+/* Dark mode: layer di elevazione via luminosità, non shadow.
    Accento leggermente desaturato per non vibrare sullo sfondo scuro. */
 .dark {
   --background: oklch(0.16 0.015 264);
@@ -122,6 +124,7 @@
   --accent-foreground: oklch(0.93 0.008 260);
 
   --destructive: oklch(0.65 0.20 25);
+  --destructive-foreground: oklch(0.98 0.005 260);
   --border: oklch(0.30 0.015 264);
   --input: oklch(0.27 0.015 264);
   --ring: oklch(0.60 0.13 264);
@@ -151,7 +154,7 @@
     font-feature-settings: "ss01", "tnum";
   }
 
-  /* Focus ring visibile per accessibilit (sezione 6.2 del web-design-skill) */
+  /* Focus ring visibile per accessibilità (sezione 6.2 del web-design-skill) */
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;

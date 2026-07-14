@@ -18,6 +18,7 @@ import { db } from "@/lib/db";
 import { getSessionUser, canViewSegnalazione } from "@/lib/auth";
 import { buildLetteraContextFromSegnalazione, generaHtmlLettera } from "@/lib/lettera";
 import { parseUrlStorageSicuro, risolviPathAllegatoSicuro } from "@/lib/path-guard";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { readFile } from "fs/promises";
 import { logger } from "@/lib/logger";
 
@@ -37,6 +38,28 @@ export async function GET(req: NextRequest, { params }: Params) {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+
+  // Rate limiting: la generazione della lettera con allegati può essere
+  // onerosa (base64 di fino a 4 foto da 10 MB = ~53 MB di HTML). Limita
+  // abusi senza impattare l'uso normale (preview/stampa di una lettera
+  // avviene tipicamente una-tre volte per segnalazione).
+  const rl = checkRateLimit(
+    `lettera:${user.id}`,
+    30,
+    60 * 60 * 1000,
+    60 * 60 * 1000,
+    5 * 60 * 1000
+  );
+  if (!rl.allowed) {
+    const minuti = Math.ceil(rl.retryAfterSeconds / 60);
+    return NextResponse.json(
+      { error: `Troppe richieste di generazione lettera. Riprova tra ${minuti} minuti.` },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rl.retryAfterSeconds) },
+      }
+    );
   }
 
   const { id } = await params;
@@ -85,7 +108,8 @@ export async function GET(req: NextRequest, { params }: Params) {
             ) as string;
 
             const buffer = await readFile(filePath);
-            const ext = parsed.filename.slice(parsed.filename.lastIndexOf(".")).toLowerCase();
+            const dotIdx = parsed.filename.lastIndexOf(".");
+            const ext = dotIdx >= 0 ? parsed.filename.slice(dotIdx).toLowerCase() : "";
             const mime =
               ext === ".png" ? "image/png" :
               ext === ".webp" ? "image/webp" :
@@ -122,6 +146,13 @@ export async function GET(req: NextRequest, { params }: Params) {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "X-Content-Type-Options": "nosniff",
+        // CSP esplicita sulla risposta HTML della lettera: defense-in-depth
+        // oltre al middleware, che potrebbe non propagare gli header su
+        // risposte text/html non JSON. La lettera contiene immagini base64
+        // e testo utente escapizzato: blocchiamo script esterni e
+        // contesti che potrebbero eseguire codice iniettato.
+        "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'none'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+        "Cache-Control": "private, no-store",
       },
     });
   } catch (e) {

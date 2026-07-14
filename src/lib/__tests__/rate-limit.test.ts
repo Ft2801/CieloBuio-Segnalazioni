@@ -49,7 +49,7 @@ describe("checkRateLimit", () => {
   it("blockCount cresce con escalation", () => {
     const key = `test-esc-${Date.now()}-${Math.random()}`;
     for (let i = 0; i < 3; i++) checkRateLimit(key, 3);
-    let result = checkRateLimit(key, 3);
+    const result = checkRateLimit(key, 3);
     expect(result.blockCount).toBe(1);
   });
 

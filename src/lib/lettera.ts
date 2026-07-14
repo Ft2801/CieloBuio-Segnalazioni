@@ -209,10 +209,10 @@ export function generaHtmlLettera(ctx: LetteraContext): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 
-  // Defense-in-depth: escapa anche i campi interpolati fuori dal <pre>
-  // principale (arpaNote, title). Questi campi sono già validati lato
-  // server (pecArpaRegionale come email, numeroProtocollo come [A-Z0-9-]),
-  // ma l'escaping previene XSS se un domani la validazione cambia.
+  // Escaping obbligatorio dei campi interpolati fuori dal <pre> principale
+  // (arpaNote, title). Questi campi derivano da input utente (nome regione,
+  // nomeCognome, indirizzo PEC) che non sono vincolati a un charset
+  // ristretto, quindi l'escaping HTML è necessario per prevenire XSS.
   const escapeHtml = (s: string): string =>
     s
       .replace(/&/g, "&amp;")
@@ -363,7 +363,7 @@ export async function buildLetteraContextFromSegnalazione(
     mittenteNome,
     mittenteIndirizzo,
     mittenteEmail,
-    destinatarioNome: s.destinatarioNome ?? `Sindaco ${s.comune?.nomeSindaco ?? ""}`,
+    destinatarioNome: s.destinatarioNome ?? (s.comune?.nomeSindaco ? `Sindaco ${s.comune.nomeSindaco}` : "Sindaco"),
     comuneNome: s.comune?.nome ?? "",
     pecComune: s.comune?.pecComune ?? "",
     indirizzoVia: s.indirizzoVia,

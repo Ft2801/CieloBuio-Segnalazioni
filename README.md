@@ -29,7 +29,7 @@
 ![ESLint](https://img.shields.io/badge/ESLint-passing-brightgreen?style=flat-square)
 ![Type Check](https://img.shields.io/badge/type%20check-passing-brightgreen?style=flat-square)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square)
-![Vitest](https://img.shields.io/badge/tests-1561%20passing-brightgreen?style=flat-square&logo=vitest&logoColor=white)
+![Vitest](https://img.shields.io/badge/tests-1562%20passing-brightgreen?style=flat-square&logo=vitest&logoColor=white)
 ![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen?style=flat-square&logo=vitest&logoColor=white)
 ![Security Tests](https://img.shields.io/badge/security%20tests-OWASP%20Top%2010-red?style=flat-square&logo=owasp&logoColor=white)
 ![Italian](https://img.shields.io/badge/lang-Italiano-red?style=flat-square&logo=italy&logoColor=white)
@@ -222,7 +222,7 @@ Il principio guida: **il backend non contiene mai hard-coded** riferimenti norma
 
 ### Prerequisiti
 
-- **Node.js 20+** (richiesto per lo sviluppo e la produzione)
+- **Node.js 22+** (richiesto per lo sviluppo e la produzione)
 - Un terminale con accesso al filesystem
 
 ### Procedura
@@ -238,7 +238,7 @@ Il principio guida: **il backend non contiene mai hard-coded** riferimenti norma
 
    ```bash
    npm install
-   # oppure: npm install
+   # oppure: npm ci (installazione deterministica da package-lock.json)
    ```
 
 3. Crea il file `.env` con la configurazione del database (PostgreSQL di default):
@@ -310,7 +310,7 @@ Le credenziali dei tre account dimostrativi sono elencate in `SETUP.md`
 Per un account reale con permessi di scrittura, crealo con:
 
 ```bash
-npm run scripts/create-admin.ts
+npm run db:create-admin
 ```
 
 Lo script chiede email, nome, ruolo e password interattivamente e li
@@ -354,8 +354,24 @@ REMINDER_GIORNI=30
 # Giorni dopo cui transizione automatica "inviata" -> "in_attesa" (default 7)
 TRANSIZIONE_INVIATA_GIORNI=7
 
-# URL pubblica della piattaforma (per i link nelle notifiche email)
+# Anni di retention GDPR dopo la chiusura della pratica (default 10)
+RETENTION_SEGNALAZIONI_ANNI=10
+
+# URL pubblica della piattaforma (per i link nelle notifiche email e per il check CSRF)
 NEXT_PUBLIC_BASE_URL=https://segnalazioni.esempio.it
+
+# Token per /api/metrics (Prometheus). Generare con: openssl rand -hex 32
+# METRICS_TOKEN=
+
+# Chiave Base64 (32 byte) per cifrare i backup. Generare con: openssl rand -base64 32
+# BACKUP_ENCRYPTION_KEY=
+
+# Directory dei backup (default: ./backups)
+# BACKUP_DIR=
+
+# Path assoluto del storage degli allegati (default: ./storage/uploads).
+# Utile in deploy Docker dove il volume è montato altrove.
+# STORAGE_ROOT=
 ```
 
 **Nota importante**: l'account PEC deve essere intestato a CieloBuio (associazione), non al volontario sviluppatore. Verificare che il provider PEC scelto supporti l'accesso SMTP con credenziali applicative (non solo webmail).
@@ -379,7 +395,7 @@ Misure principali:
 - **Business logic**: stato `approvata` blocca modifiche PUT e upload allegati; il volontario proprietario può eliminare allegati SOLO in stato "bozza" (non in "in_revisione"): previene alterazione del pacchetto probatorio dopo invio in revisione al referente
 - **CSRF**: cookie SameSite=Strict + verifica Origin/Referer nel middleware, fail-closed in produzione senza `NEXT_PUBLIC_BASE_URL`
 - **Firewall obbligatorio**: SETUP.md documenta configurazione `ufw` con `deny 3000/tcp` + `HOSTNAME=127.0.0.1` in systemd per prevenire bypass del rate limiting via accesso diretto a Node
-- **XSS**: HTML escaping di tutti i contenuti utente, CSP strict, escaping defense-in-depth anche nei campi interpolati della lettera PEC
+- **XSS**: HTML escaping di tutti i contenuti utente, CSP strict su script-src (con style-src 'unsafe-inline' per Next.js), escaping defense-in-depth anche nei campi interpolati della lettera PEC
 - **File upload**: directory privata, download autenticato, magic bytes verification (incluso RIFF+WEBP per WebP), path traversal protection, limite 4 allegati per segnalazione
 - **Email header injection**: validazione zod + regex anti-CRLF su tutti i campi PEC
 - **Security headers**: CSP, HSTS, X-Frame-Options DENY, X-Content-Type-Options nosniff, Referrer-Policy, Permissions-Policy, `X-Powered-By` disabilitato
@@ -409,24 +425,25 @@ Il progetto mantiene una **copertura del 100%** su tutte le metriche (statements
 - `src/lib/` (16 moduli di logica business: auth, cron-utils, db, demo-data, demo-mode, gdpr, lettera, logger, notifiche, path-guard, protocollo, rate-limit, totp, types, utils, validation)
 - `src/middleware.ts` (security headers, CSRF)
 - `src/hooks/use-toast.ts` (reducer toast, hook React)
-- `src/components/ui/` (12 componenti shadcn/ui)
-- `src/components/app/` (9 componenti app, inclusi dettaglio-segnalazione 729 righe, form-segnalazione 782 righe, pannello-admin 1056 righe)
+- `src/components/ui/` (13 componenti shadcn/ui)
+- `src/components/app/` (10 componenti app, inclusi dettaglio-segnalazione 740 righe, form-segnalazione 860 righe, pannello-admin 1056 righe)
 - `src/app/api/` (30 route API con test integration)
 - `src/app/layout.tsx`, `src/app/page.tsx`
 - `scripts/cron-jobs.ts` (maintenance GDPR)
 
 ### Statistiche attuali
 
-- **Test totali**: 1561 test passing (60 file di test)
-  - 482 test unitari su `src/lib/` (inclusi 27 test su `path-guard.ts`, 27 test su `totp.ts`, 11 test su `cron-utils.ts`)
-  - 460 test di integrazione su 30 API routes (inclusi 14 test su `/api/auth/2fa` e 8 test su TOTP gate nel login)
-  - 80 test di sicurezza informatica (OWASP Top 10, tutti con verifiche reali su codice sorgente)
-  - 35 test su feature enterprise (health, docs, metrics con token Prometheus, TOTP integrato con anti-lockout, backup encryption completa)
-  - 530 test su componenti React
+- **Test totali**: 1562 test passing (60 file di test)
+  - 396 test unitari su `src/lib/` (inclusi 27 test su `path-guard.ts`, 11 test su `cron-utils.ts`, 19 test su `protocollo.ts`, 17 test su `lettera.ts`)
+  - 460 test di integrazione su 30 API routes (inclusi 23 test su `/api/auth/2fa`)
+  - 75 test di sicurezza informatica (OWASP Top 10, tutti con verifiche reali su codice sorgente)
+  - 33 test su feature enterprise (health, docs, metrics con token Prometheus, TOTP integrato con anti-lockout, backup encryption completa)
+  - 488 test su componenti React (473 app + 15 layout/page)
+  - 56 test su 13 componenti UI shadcn/ui
   - 25 test su middleware
   - 20 test su hook (use-toast)
-  - 7 test su cron-jobs
-- **Coverage**: **100% statements, 100% branches, 100% functions, 100% lines** su TUTTO il codice sorgente
+  - 8 test su cron-jobs
+- **Coverage**: **100% statements, 100% branches, 100% functions, 100% lines** su tutto il codice sorgente coperto (esclusi tipi, dati demo, client DB e script CLI non testati)
 - **TypeScript strict**: 0 errori (`tsc --noEmit` pulito)
 - **ESLint**: 0 errori, 0 warning
 - **Build**: Next.js 16 standalone riuscito
@@ -445,7 +462,7 @@ Il progetto mantiene una **copertura del 100%** su tutte le metriche (statements
 | `src/lib/validation.ts` | 100% | 100% | 100% | 100% |
 | `src/middleware.ts` | 100% | 100% | 100% | 100% |
 | `src/hooks/use-toast.ts` | 100% | 100% | 100% | 100% |
-| `src/components/ui/*` (12 file) | 100% | 100% | 100% | 100% |
+| `src/components/ui/*` (13 file) | 100% | 100% | 100% | 100% |
 | `src/app/api/*` (30 route) | 100% | 100% | 100% | 100% |
 | `scripts/cron-jobs.ts` | 100% | 100% | 100% | 100% |
 
@@ -492,9 +509,9 @@ npm run test:watch
 
 ### Categorie di test
 
-- **Test unitari** (`src/lib/__tests__/`): 482 test su funzioni pure, helper autenticazione, generazione lettera, protocollo, rate limiting, validazione Zod, notifiche email, modalità demo, path-guard, TOTP, cron-utils
+- **Test unitari** (`src/lib/__tests__/`): 396 test su funzioni pure, helper autenticazione, generazione lettera, protocollo, rate limiting, validazione Zod, notifiche email, modalità demo, path-guard, TOTP, cron-utils
 - **Test integration API** (`src/app/api/__tests__/`): 460 test su tutte le 30 route handler con mock di DB (Prisma), next/headers, nodemailer, bcryptjs, fs/promises
-- **Test sicurezza informatica** (`src/__tests__/security-attack-suite.test.ts`): 80 test di penetrazione simulati organizzati per categoria OWASP Top 10, tutti con verifiche reali su codice sorgente:
+- **Test sicurezza informatica** (`src/__tests__/security-attack-suite.test.ts`): 75 test di penetrazione simulati organizzati per categoria OWASP Top 10, tutti con verifiche reali su codice sorgente:
   - **A01 Broken Access Control**: IDOR prevention, fail-closed per referenti senza territorio, sentinella `__NEVER_MATCH__`
   - **A02 Cryptographic Failures**: bcrypt cost 12, `__Host-` cookie prefix, flag HttpOnly/SameSite=Strict/Secure
   - **A03 Injection**: SQL injection (Prisma parametrizzato), email header injection (CRLF prevention), CSV formula injection
@@ -507,9 +524,13 @@ npm run test:watch
   - **XSS**: HTML escaping in generaHtmlLettera
   - **DEMO**: blocco azioni mutative in demo mode
   - **GDPR**: anonimizzazione automatica con rimozione PII
+- **Test feature enterprise** (`src/__tests__/enterprise-features.test.ts`): 33 test su health, docs, metrics, TOTP anti-lockout, backup encryption
 - **Test middleware** (`src/__tests__/middleware.test.ts`): 25 test su security headers, CSRF check, fail-closed
-- **Test componenti React** (`src/components/**/__tests__/`): 530 test su rendering, interazioni, stati, errori, demo mode
-- **Test scripts** (`scripts/__tests__/`): 7 test su cron-jobs (pulizia sessioni, transizioni, anonimizzazione GDPR, errori)
+- **Test componenti React** (`src/components/app/__tests__/`): 473 test su rendering, interazioni, stati, errori, demo mode
+- **Test layout e page** (`src/app/__tests__/`): 15 test su metadata, viewport, struttura di base
+- **Test componenti UI** (`src/components/ui/__tests__/`): 56 test su 13 componenti shadcn/ui (button, input, card, dialog, select, toast, toaster, switch, checkbox, tabs, textarea, label, badge)
+- **Test hook** (`src/hooks/__tests__/`): 20 test su use-toast (reducer, dispatch, cleanup)
+- **Test scripts** (`scripts/__tests__/`): 8 test su cron-jobs (pulizia sessioni, transizioni, anonimizzazione GDPR, errori)
 - **Test edge cases**: rami difensivi (fail-closed, fallback, catch block, rami `??` e `&&`)
 
 ---
@@ -537,8 +558,11 @@ Punti chiave:
 ├── scripts/
 │   ├── seed.ts                 # Script di popolamento dati di configurazione (no utenti)
 │   ├── create-admin.ts         # Crea un utente interattivamente (email/password a runtime)
-│   ├── cron-jobs.ts            # Maintenance periodica (transizioni, pulizia sessioni)
-│   ├── backup-db.ts            # Backup del database in JSON con retention
+│   ├── cron-jobs.ts            # Maintenance periodica (transizioni, pulizia sessioni, GDPR)
+│   ├── backup-db.ts            # Backup del database in JSON con cifratura AES-256-GCM
+│   ├── restore-db.ts           # Ripristino del database da backup cifrato
+│   ├── build-pages.mjs         # Helper build statica per GitHub Pages (modalità demo)
+│   ├── deploy.sh               # Automazione deploy VPS (backup, pull, build, restart)
 │   └── generate-icons.py       # Generazione icone PWA (192x192, 512x512)
 ├── src/
 │   ├── app/
@@ -566,6 +590,7 @@ Punti chiave:
 │   │   │   ├── dettaglio-segnalazione.tsx # Dettaglio + azioni + anteprima lettera
 │   │   │   ├── pannello-admin.tsx     # Pannello amministrazione
 │   │   │   ├── vista-reminder.tsx     # Vista promemoria
+│   │   │   ├── autore-link.tsx        # Link all'autore del progetto
 │   │   │   └── use-session.ts         # Hook sessione
 │   │   └── ui/                 # Componenti shadcn/ui
 │   └── lib/
@@ -593,7 +618,8 @@ Punti chiave:
 │   ├── sw-register.js          # Registrazione service worker (script esterno)
 │   └── logo.svg                # Logo
 ├── storage/
-│   └── uploads/                # Allegati caricati (directory PRIVATA, gitignored)
+│   └── uploads/                # Allegati caricati (directory PRIVATA, gitignored, creata al primo upload)
+├── .dockerignore               # Esclusioni build context Docker (previene leak di secrets)
 ├── .env.example                # Template variabili d'ambiente
 ├── Caddyfile                   # Reverse proxy + HTTPS automatico per la produzione
 ├── Dockerfile                  # Build multi-stage per deploy containerizzato
@@ -611,7 +637,11 @@ Punti chiave:
 ├── tsconfig.json
 ├── vitest.config.ts            # Configurazione Vitest con coverage
 ├── eslint.config.mjs           # Configurazione ESLint
-└── next.config.ts              # Configurazione Next.js (standalone output)
+├── components.json             # Configurazione shadcn/ui
+├── postcss.config.mjs          # Configurazione PostCSS (Tailwind CSS 4)
+├── next-env.d.ts               # Tipi Next.js
+├── next.config.ts              # Configurazione Next.js (standalone output)
+└── next.config.pages.ts        # Configurazione Next.js per build statica GitHub Pages (demo)
 ```
 
 ---
@@ -695,7 +725,7 @@ Le contribuzioni sono benvenute. Vedi [CONTRIBUTING.md](CONTRIBUTING.md) per le 
 
 ## Supporto e segnalazioni
 
-- **Bug, feature request, domande**: apri una issue su https://github.com/Ft2801/CieloBuio-Segnalazioni/issues
+- **Segnalazioni, feature request, domande**: apri una issue su https://github.com/Ft2801/CieloBuio-Segnalazioni/issues
 - **Contatto diretto (anche per segnalazioni sensibili che non vuoi esporre pubblicamente)**: fabiot2801@gmail.com
 - **Vulnerabilità di sicurezza**: vedi [SECURITY.md](SECURITY.md) per la procedura di divulgazione responsabile
 

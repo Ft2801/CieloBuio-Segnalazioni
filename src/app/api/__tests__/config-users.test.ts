@@ -17,8 +17,8 @@ vi.mock("bcryptjs", () => ({
   default: { hash: mockHash },
 }));
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  const mockDb = {
     user: {
       findMany: vi.fn(),
       findUnique: vi.fn(),
@@ -30,10 +30,16 @@ vi.mock("@/lib/db", () => ({
     sessione: {
       findUnique: vi.fn(),
       deleteMany: vi.fn(),
-      delete: vi.fn(),
+      delete: vi.fn().mockResolvedValue({}),
     },
-  },
-}));
+    $transaction: vi.fn(),
+  };
+  mockDb.$transaction.mockImplementation(async (cb) => {
+    if (typeof cb === "function") return cb(mockDb);
+    return Promise.all(cb);
+  });
+  return { db: mockDb };
+});
 
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
@@ -279,10 +285,11 @@ describe("POST /api/config/users", () => {
     vi.mocked(db.user.create).mockResolvedValue({ id: "x" } as any);
     await POST(makeReq("POST", {
       email: "terr@t.it", nomeCognome: "X", password: VALID_PASSWORD,
-      provinciaId: 5, regioneId: 2,
+      ruolo: "referente_provinciale",
+      provinciaId: 5,
     }));
     expect(db.user.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ provinciaId: 5, regioneId: 2 }),
+      data: expect.objectContaining({ provinciaId: 5, ruolo: "referente_provinciale" }),
     }));
   });
 });

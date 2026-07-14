@@ -24,7 +24,7 @@ describe("validate - ramo fallback 'Validazione fallita'", () => {
     const fakeResult = {
       success: false,
       error: {
-        issues: [], // issues vuoto: firstError sara' undefined -> ramo ??
+        issues: [], // issues vuoto: firstError sarà undefined -> ramo ??
       },
     };
     vi.spyOn(schema, "safeParse").mockReturnValue(fakeResult as any);

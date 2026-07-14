@@ -39,9 +39,12 @@ export function labelStato(stato: string): string {
  * lati si allineano automaticamente.
  *
  * L'admin può forzare transizioni non lecite via API (?force=1), ma
- * l'UI non espone questa possibilità.
+ * l'UI non espone questa possibilità. Lo stato "inviata" non è mai
+ * forzabile via cambia-stato: è raggiungibile solo tramite /invia-pec
+ * che genera il numero di protocollo, imposta dataInvio e crea il
+ * log PEC.
  */
-export const TRANSIZIONI_LECITE: Record<string, string[]> = {
+export const TRANSIZIONI_LECITE: Record<StatoSegnalazione, StatoSegnalazione[]> = {
   bozza: ["in_revisione"],
   in_revisione: ["bozza", "approvata"],
   // "inviata" NON è inclusa: per passare ad "inviata" si DEVE usare
@@ -109,6 +112,13 @@ export type SessionUser = {
 export type Segnalazione = {
   id: string;
   numeroProtocollo: string | null;
+  // Le date sono stringhe ISO 8601 quando trasmesse via API (JSON non
+  // ha tipo Date nativo). Le route API convertono Date Prisma in stringa
+  // prima di restituire il JSON. Il codice server-side che lavora con
+  // il tipo Prisma direttamente (es. lettera.ts) accede al campo come
+  // Date: la conversione esplicita `new Date(s.dataSegnalazione)` è
+  // sicura in entrambi i casi (Date passato a new Date ritorna un Date
+  // equivalente, stringa ISO viene parsata).
   dataSegnalazione: string;
   stato: StatoSegnalazione;
   volontarioId: string | null; // Nullable per anonimizzazione GDPR
@@ -147,7 +157,10 @@ export type Segnalazione = {
   comune?: { id: number; nome: string; pecComune: string; nomeSindaco: string | null } | null;
   provincia?: { id: number; sigla: string; nome: string } | null;
   regione?: { id: number; regione: string; riferimentoLegge: string } | null;
-  volontario?: { id: string; nomeCognome: string; email: string };
+  // volontario è nullable per supportare le segnalazioni anonimizzate
+  // (volontarioId=null dopo GDPR retention). Il `| null` esplicito
+  // previene accessi `volontario.email` senza null check.
+  volontario?: { id: string; nomeCognome: string; email: string } | null;
   referenteApprovatore?: { id: string; nomeCognome: string } | null;
   allegati?: Allegato[];
   // _count è opzionale perché non tutte le query lo includono

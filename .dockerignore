@@ -1,0 +1,66 @@
+# Docker build context exclusions
+# Riduce il context inviato al daemon Docker (build più veloci) e
+# previene leak di segreti/PII nel builder stage (che resta nella cache).
+
+# Dipendenze (verranno reinstallate con `npm ci` nel builder)
+node_modules
+
+# Build artifacts
+.next
+out
+coverage
+*.tsbuildinfo
+
+# Storage e backups (PII e dati sensibili)
+# storage/ contiene uploads/ e il .gitkeep che mantiente la directory in
+# git. Escludiamo il contenuto di uploads/ dal build context (i file
+# caricati sono runtime, non build-time) ma manteniamo storage/.gitkeep
+# per preservare la struttura delle directory.
+storage/uploads/*
+storage/.gitkeep
+backups
+logs
+*.log
+
+# Environment e secrets
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Git e editor
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Documentazione non necessaria al runtime
+README.md
+SETUP.md
+SECURITY.md
+PRIVACY.md
+CONTRIBUTING.md
+CHANGELOG.md
+LICENSE
+
+# Test e script di test (non servono nel runtime)
+**/__tests__
+**/*.test.ts
+**/*.test.tsx
+vitest.config.ts
+setup-tests.ts
+
+# Editor config non necessaria al runtime
+.prettier*
+
+# File temporanei
+*.tmp
+*.bak
+tmp

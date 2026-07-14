@@ -18,7 +18,7 @@ describe("cn (className utility)", () => {
     expect(cn("foo", true && "bar", "baz")).toBe("foo bar baz");
   });
 
-  it("gestisce undefined e null", () => {
+  it("gestisce undefined è null", () => {
     expect(cn("foo", undefined, null, "bar")).toBe("foo bar");
   });
 
@@ -62,7 +62,7 @@ describe("DEMO_SEGNALAZIONI", () => {
     expect(DEMO_SEGNALAZIONI).toHaveLength(5);
   });
 
-  it("ogni segnalazione ha id e stato", () => {
+  it("ogni segnalazione ha id è stato", () => {
     for (const s of DEMO_SEGNALAZIONI) {
       expect(s.id).toBeTruthy();
       expect(s.stato).toBeTruthy();

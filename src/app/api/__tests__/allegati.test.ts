@@ -6,8 +6,8 @@
  *
  * Copre:
  * - 401/403/404/400/200 per ciascuna route
- * - FIX RECENTE: proprietario può eliminare SOLO in stato "bozza"
- *   (NON in "in_revisione"); referenti/admin possono eliminare in entrambi
+ * - Proprietario può eliminare SOLO in stato "bozza" (NON in
+ *   "in_revisione"); referenti/admin possono eliminare in entrambi gli stati
  * - Path traversal protection (id malformato, "..", segnalazioneId mismatch)
  * - Content-Disposition: attachment (download) vs inline (preview)
  * - Content-Type basato su estensione, sanitizzazione filename
@@ -25,18 +25,25 @@ vi.mock("fs/promises", () => ({
   stat: vi.fn(),
 }));
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  const mockDb = {
     allegato: {
       findUnique: vi.fn(),
       delete: vi.fn(),
+      deleteMany: vi.fn(),
     },
     sessione: {
       findUnique: vi.fn(),
-      delete: vi.fn(),
+      delete: vi.fn().mockResolvedValue({}),
     },
-  },
-}));
+    $transaction: vi.fn(),
+  };
+  mockDb.$transaction.mockImplementation(async (cb) => {
+    if (typeof cb === "function") return cb(mockDb);
+    return Promise.all(cb);
+  });
+  return { db: mockDb };
+});
 
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
@@ -149,7 +156,10 @@ function makeGetReq(id: string, sub: "download" | "preview"): NextRequest {
 // DELETE /api/allegati
 // ---------------------------------------------------------------------------
 describe("DELETE /api/allegati", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(db.allegato.deleteMany).mockResolvedValue({ count: 1 });
+  });
 
   it("ritorna 401 se non autenticato", async () => {
     mockSession(null);
@@ -201,7 +211,7 @@ describe("DELETE /api/allegati", () => {
     expect(json.error).toContain("Non autorizzato");
   });
 
-  it("ritorna 403 se proprietario in stato in_revisione (FIX RECENTE)", async () => {
+  it("ritorna 403 se proprietario in stato in_revisione (pacchetto congelato)", async () => {
     // Il proprietario può eliminare SOLO in bozza, NON in in_revisione:
     // il pacchetto probatorio è congelato dopo l'invio in revisione.
     mockSession(VOL_SESSION);
@@ -217,7 +227,6 @@ describe("DELETE /api/allegati", () => {
   it("ritorna 200 se proprietario elimina in stato bozza", async () => {
     mockSession(VOL_SESSION);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as any);
-    vi.mocked(db.allegato.delete).mockResolvedValue({} as any);
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -225,7 +234,7 @@ describe("DELETE /api/allegati", () => {
     // Verifica che unlink sia stato chiamato (file eliminato da disco)
     expect(unlink).toHaveBeenCalledTimes(1);
     // Verifica che delete DB sia stato chiamato
-    expect(db.allegato.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(db.allegato.deleteMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: "a1" }) }));
   });
 
   it("ritorna 200 se admin elimina in stato in_revisione", async () => {
@@ -235,7 +244,6 @@ describe("DELETE /api/allegati", () => {
         segnalazione: { id: "s1", stato: "in_revisione", volontarioId: "u-vol", provinciaId: 5, regioneId: 3 },
       }) as any
     );
-    vi.mocked(db.allegato.delete).mockResolvedValue({} as any);
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
   });
@@ -247,7 +255,6 @@ describe("DELETE /api/allegati", () => {
         segnalazione: { id: "s1", stato: "in_revisione", volontarioId: "u-vol", provinciaId: 5, regioneId: 3 },
       }) as any
     );
-    vi.mocked(db.allegato.delete).mockResolvedValue({} as any);
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
   });
@@ -282,7 +289,6 @@ describe("DELETE /api/allegati", () => {
         segnalazione: { id: "s1", stato: "in_revisione", volontarioId: "u-vol", provinciaId: 5, regioneId: 3 },
       }) as any
     );
-    vi.mocked(db.allegato.delete).mockResolvedValue({} as any);
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
   });
@@ -302,11 +308,10 @@ describe("DELETE /api/allegati", () => {
     mockSession(VOL_SESSION);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as any);
     vi.mocked(unlink).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-    vi.mocked(db.allegato.delete).mockResolvedValue({} as any);
     const res = await DELETE(makeDeleteReq("a1"));
     // L'errore unlink è ignorato: il record DB viene comunque eliminato
     expect(res.status).toBe(200);
-    expect(db.allegato.delete).toHaveBeenCalled();
+    expect(db.allegato.deleteMany).toHaveBeenCalled();
   });
 
   it("skip unlink se urlStorage malformato, ma elimina record DB", async () => {
@@ -314,21 +319,19 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({ urlStorage: "formato-malformato-senza-slash" }) as any
     );
-    vi.mocked(db.allegato.delete).mockResolvedValue({} as any);
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
     // unlink non viene chiamato perché il parsing del path fallisce
     expect(unlink).not.toHaveBeenCalled();
     // ma delete DB viene comunque chiamato
-    expect(db.allegato.delete).toHaveBeenCalled();
+    expect(db.allegato.deleteMany).toHaveBeenCalled();
   });
 
   it("gestisce urlStorage legacy (api/allegatiplaceholder/<id>/<file>)", async () => {
     mockSession(VOL_SESSION);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "/api/allegatiplaceholder/s1/old-file.jpg" }) as any
+      mockAllegato({ urlStorage: "api/allegatiplaceholder/s1/old-file.jpg" }) as any
     );
-    vi.mocked(db.allegato.delete).mockResolvedValue({} as any);
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
     // unlink viene chiamato con il path legacy ricostruito
@@ -340,12 +343,11 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({ urlStorage: "s1-different/uuid-filename.jpg" }) as any
     );
-    vi.mocked(db.allegato.delete).mockResolvedValue({} as any);
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
     // unlink non viene chiamato: segnalazioneId mismatch (defense-in-depth)
     expect(unlink).not.toHaveBeenCalled();
-    expect(db.allegato.delete).toHaveBeenCalled();
+    expect(db.allegato.deleteMany).toHaveBeenCalled();
   });
 });
 
@@ -497,7 +499,7 @@ describe("GET /api/allegati/[id]/download", () => {
     const fileBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
-        urlStorage: "/api/allegatiplaceholder/s1/old-photo.png",
+        urlStorage: "api/allegatiplaceholder/s1/old-photo.png",
         nomeOriginale: "old-photo.png",
       }) as any
     );
@@ -686,7 +688,7 @@ describe("GET /api/allegati/[id]/preview", () => {
     const fileBuffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
-        urlStorage: "/api/allegatiplaceholder/s1/old-photo.jpg",
+        urlStorage: "api/allegatiplaceholder/s1/old-photo.jpg",
         nomeOriginale: "old-photo.jpg",
       }) as any
     );

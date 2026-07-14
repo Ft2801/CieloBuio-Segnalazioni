@@ -23,12 +23,15 @@
  */
 
 import { PrismaClient } from "@prisma/client";
-import { mkdir, writeFile, readFile, readdir, rm, stat } from "fs/promises";
+import { mkdir, writeFile, readFile, readdir, rm, stat, lstat, realpath } from "fs/promises";
 import path from "path";
 import { createCipheriv, randomBytes } from "crypto";
 
 const db = new PrismaClient();
-const BACKUP_DIR = process.env.BACKUP_DIR ?? "./backups";
+// BACKUP_DIR risolta in modo assoluto rispetto alla cwd del progetto per
+// coerenza con scripts/restore-db.ts: in caso di esecuzione da directory
+// diverse (es. cron vs CLI), entrambi gli script usano lo stesso percorso.
+const BACKUP_DIR = path.resolve(process.env.BACKUP_DIR ?? path.join(process.cwd(), "backups"));
 const RETENTION_DAYS = 30;
 const ENCRYPTION_KEY = process.env.BACKUP_ENCRYPTION_KEY ?? null;
 
@@ -164,6 +167,15 @@ async function main() {
   /**
    * Copia ricorsivamente cifrando ogni file se ENCRYPTION_KEY è impostata.
    * Se ENCRYPTION_KEY non è impostata, copia in chiaro (modalità dev/test).
+   *
+   * Security:
+   *  - Usa lstat invece di stat per NON seguire i symlink: un symlink
+   *    malevolo in storage/uploads/ potrebbe altrimenti puntare a file
+   *    fuori dalla directory (es. /etc/passwd) e finire nel backup.
+   *  - Verifica che il realpath del file sia dentro storage/uploads/
+   *    come defense-in-depth.
+   *  - Salta file più grandi di 500 MB per evitare OOM del processo
+   *    di backup (logga un warning per il file saltato).
    */
   async function copyAndMaybeEncrypt(src: string, dst: string): Promise<number> {
     let count = 0;
@@ -174,13 +186,56 @@ async function main() {
       return 0;
     }
     await mkdir(dst, { recursive: true });
+    const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
     for (const entry of entries) {
       const srcPath = path.join(src, entry);
       const dstPath = path.join(dst, entry);
-      const s = await stat(srcPath);
+      // lstat NON segue i symlink: se entry è un symlink, lstat ritorna
+      // le info del link stesso, non del target. Questo previene path
+      // traversal via symlink malevoli nel storage.
+      // Tipo esplicito: senza annotation, `let s;` è implicitamente `any`,
+      // disabilitando il type checking sugli accessi successivi (.isSymbolicLink,
+      // .isDirectory, .size, ...). Dichiariamo il tipo corretto Stats.
+      let s: import("fs").Stats;
+      try {
+        s = await lstat(srcPath);
+      } catch {
+        continue;
+      }
+      if (s.isSymbolicLink()) {
+        // Salta i symlink: non dovrebbero essercene in storage/uploads/,
+        // la loro presenza è sospetta. Logga e continua.
+        console.warn(`[SECURITY] Symlink saltato durante backup: ${srcPath}`);
+        continue;
+      }
       if (s.isDirectory()) {
         count += await copyAndMaybeEncrypt(srcPath, dstPath);
-      } else {
+      } else if (s.isFile()) {
+        // Verifica dimensione: file troppo grandi sono sospetti o
+        // causerebbero OOM nel processo di backup.
+        if (s.size > MAX_FILE_SIZE) {
+          console.warn(`[BACKUP] File troppo grande saltato (${(s.size / 1024 / 1024).toFixed(2)} MB): ${srcPath}`);
+          continue;
+        }
+        // Defense-in-depth: verifica che il realpath del file sia
+        // dentro src. Anche se abbiamo saltato i symlink, questo check
+        // protegge in caso di hardlink o altri edge case FS.
+        // Wrap in try/catch: realpath può reject se il file viene eliminato
+        // concorrentemente tra lstat e realpath (TOCTOU). In tal caso skip
+        // il file invece di abortire l'intero backup.
+        let realPath: string;
+        let srcResolved: string;
+        try {
+          realPath = await realpath(srcPath);
+          srcResolved = await realpath(src);
+        } catch (e) {
+          console.warn(`[BACKUP] realpath fallito (file rimosso concorrentemente?), skip: ${srcPath}`);
+          continue;
+        }
+        if (!realPath.startsWith(srcResolved + path.sep) && realPath !== srcResolved) {
+          console.warn(`[SECURITY] File fuori dal path di storage saltato: ${srcPath} -> ${realPath}`);
+          continue;
+        }
         const data = await readFile(srcPath);
         if (ENCRYPTION_KEY) {
           const encrypted = encryptBuffer(data, ENCRYPTION_KEY);
@@ -235,7 +290,7 @@ async function main() {
       rimossi++;
     } else if (dirTime === null && s.mtimeMs < cutoff) {
       // Fallback su mtime solo se il parsing del nome fallisce
-      // (es. backup creati con vecchio formato timestamp pre-fix).
+      // (es. backup creati con vecchio formato timestamp).
       await rm(fullPath, { recursive: true, force: true });
       rimossi++;
     }
@@ -247,11 +302,15 @@ async function main() {
   console.log(`[${new Date().toISOString()}] Backup completato.`);
 }
 
-main()
-  .catch((e) => {
+async function run() {
+  try {
+    await main();
+  } catch (e) {
     console.error("Errore backup:", e);
-    process.exit(1);
-  })
-  .finally(async () => {
     await db.$disconnect();
-  });
+    process.exit(1);
+  }
+  await db.$disconnect();
+}
+
+run();

@@ -21,6 +21,11 @@ const { mockVerifyTotp } = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/totp", () => ({
   verifyTotp: mockVerifyTotp,
+  verifyTotpWithDelta: vi.fn((token: string, secret: string) => {
+    const valid = mockVerifyTotp(token, secret);
+    return { valid, delta: 0 };
+  }),
+  computeTotpTimestep: vi.fn(() => 123456),
   generateTotpSecret: vi.fn(() => "MOCKSECRETBASE32"),
   generateTotpUri: vi.fn(() => "otpauth://totp/mock"),
 }));
@@ -29,10 +34,12 @@ vi.mock("@/lib/db", () => ({
   db: {
     user: {
       findUnique: vi.fn(),
+      update: vi.fn().mockResolvedValue({}),
     },
     sessione: {
       deleteMany: vi.fn(),
       create: vi.fn(),
+      delete: vi.fn().mockResolvedValue({}),
     },
     $transaction: vi.fn(async (args: unknown[]) => Promise.all(args)),
   },

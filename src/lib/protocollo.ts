@@ -9,7 +9,7 @@
  * - NC = iniziali nome e cognome del segnalatore (2 lettere)
  * - XX = progressivo giornaliero dell'utente (2 cifre)
  *
- * Casi speciali già gestiti nel sistema Excel:
+ * Casi speciali gestiti nella mappa REGIONE_PROTOCOLLO:
  * - Provincia di Trento -> regione TRENTINO
  * - Provincia di Bolzano -> regione ALTO ADIGE
  * - Provincia di Aosta -> regione VALLE D'AOSTA
@@ -53,6 +53,12 @@ export function getRegioneCodice(regione: string): string {
   // Normalizza: prova prima la chiave diretta, poi con underscore/trattino
   // convertiti in spazi, per gestire qualsiasi convenzione salvata nel DB.
   const normalized = regione.trim().toUpperCase();
+  if (!normalized) {
+    // Regione vuota: logga e ritorna un placeholder esplicito, evitando
+    // di produrre un numero di protocollo con doppi trattini.
+    logger.error({ regione }, "[protocollo] Regione vuota passata a getRegioneCodice");
+    return "XXX";
+  }
   if (REGIONE_PROTOCOLLO[normalized]) return REGIONE_PROTOCOLLO[normalized];
   const withSpaces = normalized.replace(/[_-]/g, " ");
   if (REGIONE_PROTOCOLLO[withSpaces]) return REGIONE_PROTOCOLLO[withSpaces];
@@ -83,6 +89,10 @@ export { pad2 };
  * Se il nome o il cognome ha più parole, prende la prima lettera della
  * prima parola e della seconda. Gestisce nomi malformati (spazi iniziali,
  * singola parola, stringa vuota) con fallback a "XX".
+ *
+ * Lo slicing è code-point-safe: usa `[...str]` per iterare per code point
+ * Unicode invece che per code unit UTF-16, gestendo correttamente
+ * caratteri multibyte (emoji, caratteri outside BMP).
  */
 export function getInizialiSegnalatore(
   nomeCognome: string,
@@ -93,10 +103,14 @@ export function getInizialiSegnalatore(
   }
   const parts = nomeCognome.trim().split(/\s+/).filter((p) => p.length > 0);
   if (parts.length >= 2) {
-    return (parts[0][0] + parts[1][0]).toUpperCase();
+    const a = [...parts[0]][0];
+    const b = [...parts[1]][0];
+    if (a && b) return (a + b).toUpperCase();
   }
-  if (parts.length === 1 && parts[0].length >= 2) {
-    return parts[0].slice(0, 2).toUpperCase();
+  if (parts.length === 1) {
+    const chars = [...parts[0]];
+    if (chars.length >= 2) return (chars[0] + chars[1]).toUpperCase();
+    if (chars.length === 1) return (chars[0] + "X").toUpperCase();
   }
   // Fallback per input malformati (stringa vuota, singolo carattere,
   // o solo whitespace): ritorna un placeholder fisso.
@@ -104,10 +118,30 @@ export function getInizialiSegnalatore(
 }
 
 /**
+ * Calcola l'inizio e la fine (esclusiva) della giornata locale per la
+ * data passata. Usiamo un bound superiore esclusivo (mezzanotte del
+ * giorno successivo) per includere correttamente eventuali record con
+ * timestamp sub-secondo tra 23:59:59.000 e 23:59:59.999.
+ */
+function getGiornataBounds(data: Date): { inizioGiornata: Date; fineGiornataEsclusiva: Date } {
+  const yyyy = data.getFullYear();
+  const month = data.getMonth();
+  const day = data.getDate();
+  const inizioGiornata = new Date(yyyy, month, day, 0, 0, 0, 0);
+  const fineGiornataEsclusiva = new Date(yyyy, month, day + 1, 0, 0, 0, 0);
+  return { inizioGiornata, fineGiornataEsclusiva };
+}
+
+/**
  * Calcola un numero di protocollo previsionale (senza persistarlo).
  * Usato da simula-pec per mostrare l'anteprima del protocollo senza
  * assegnarlo definitivamente. Condivide la stessa logica di calcolo
  * di generaNumeroProtocollo per garantire coerenza.
+ *
+ * Il conteggio è basato sul prefisso del numero di protocollo
+ * (data + regione + provincia + iniziali) e NON sul volontarioId:
+ * questo garantisce coerenza anche dopo anonimizzazione GDPR, quando
+ * il volontarioId viene posto a null ma il numero di protocollo resta.
  */
 export async function calcolaProtocolloPrevisionale(params: {
   data: Date;
@@ -121,7 +155,6 @@ export async function calcolaProtocolloPrevisionale(params: {
     data,
     regione,
     provinciaSigla,
-    segnalatoreId,
     segnalatoreNomeCognome,
     inizialiProtocollo,
   } = params;
@@ -133,18 +166,21 @@ export async function calcolaProtocolloPrevisionale(params: {
   const pv = provinciaSigla.toUpperCase();
   const nc = getInizialiSegnalatore(segnalatoreNomeCognome, inizialiProtocollo);
 
-  const inizioGiornata = new Date(yyyy, data.getMonth(), data.getDate(), 0, 0, 0);
-  const fineGiornata = new Date(yyyy, data.getMonth(), data.getDate(), 23, 59, 59);
+  const { inizioGiornata, fineGiornataEsclusiva } = getGiornataBounds(data);
 
+  // Conta i protocolli già assegnati oggi con lo stesso prefisso.
+  // Il filtro su `numeroProtocollo startsWith` trova tutti i record
+  // che iniziano con il prefisso calcolato, indipendentemente dal
+  // volontarioId (che potrebbe essere null dopo anonimizzazione GDPR).
+  const prefisso = `${yyyy}${mm}${gg}-${reg}-${pv}-${nc}`;
   const count = await db.segnalazione.count({
     where: {
-      volontarioId: segnalatoreId,
-      dataSegnalazione: { gte: inizioGiornata, lte: fineGiornata },
-      NOT: { numeroProtocollo: null },
+      numeroProtocollo: { startsWith: prefisso },
+      dataSegnalazione: { gte: inizioGiornata, lt: fineGiornataEsclusiva },
     },
   });
   const xx = pad2(count + 1);
-  return `${yyyy}${mm}${gg}-${reg}-${pv}-${nc}${xx}`;
+  return `${prefisso}${xx}`;
 }
 
 /**
@@ -152,10 +188,20 @@ export async function calcolaProtocolloPrevisionale(params: {
  *
  * Il count delle segnalazioni con protocollo già assegnato nella giornata
  * NON è atomico rispetto a un secondo processo concorrente (PostgreSQL non
- * supporta SELECT FOR UPDATE). La protezione contro le race condition si
- * affida al vincolo unique su numeroProtocollo (P2002): se due richieste
- * concorrenti calcolano lo stesso progressivo, la seconda fallisce con
- * P2002 e viene ritentata con progressivo+1, fino a 10 tentativi.
+ * supporta SELECT FOR UPDATE in modo diretto su count). La protezione
+ * contro le race condition si affida al vincolo unique su numeroProtocollo
+ * (P2002): se due richieste concorrenti calcolano lo stesso progressivo,
+ * la seconda fallisce con P2002 e viene ritentata con progressivo+1,
+ * fino a 10 tentativi.
+ *
+ * Il conteggio è basato sul prefisso del numero di protocollo
+ * (YYYYMMGG-REG-PV-NC) e NON sul volontarioId, per garantire coerenza
+ * anche dopo anonimizzazione GDPR (quando volontarioId diventa null).
+ *
+ * Protezione anti-sovrascrittura: la UPDATE usa una clausola WHERE che
+ * richiede `numeroProtocollo: null`, così una segnalazione che ha già
+ * un protocollo assegnato non viene sovrascritta (updateMany count=0
+ * viene interpretato come "protocollo già assegnato").
  */
 export async function generaNumeroProtocollo(params: {
   data: Date;
@@ -170,7 +216,6 @@ export async function generaNumeroProtocollo(params: {
     data,
     regione,
     provinciaSigla,
-    segnalatoreId,
     segnalatoreNomeCognome,
     inizialiProtocollo,
     segnalazioneId,
@@ -183,38 +228,64 @@ export async function generaNumeroProtocollo(params: {
   const pv = provinciaSigla.toUpperCase();
   const nc = getInizialiSegnalatore(segnalatoreNomeCognome, inizialiProtocollo);
 
-  const inizioGiornata = new Date(yyyy, data.getMonth(), data.getDate(), 0, 0, 0);
-  const fineGiornata = new Date(yyyy, data.getMonth(), data.getDate(), 23, 59, 59);
+  const { inizioGiornata, fineGiornataEsclusiva } = getGiornataBounds(data);
+  const prefisso = `${yyyy}${mm}${gg}-${reg}-${pv}-${nc}`;
+
+  // Query iniziale: conta i protocolli odierni con questo prefisso.
+  // Non viene ripetuta nel loop: usiamo countBase + tentativo come
+  // progressivo candidato, evitando di saltare valori intermedi se
+  // una richiesta concorrente prende lo stesso progressivo.
+  const countBase = await db.segnalazione.count({
+    where: {
+      numeroProtocollo: { startsWith: prefisso },
+      dataSegnalazione: { gte: inizioGiornata, lt: fineGiornataEsclusiva },
+    },
+  });
 
   // Tenta fino a 10 volte per gestire collisioni sul unique.
-  // Il count NON è atomico (vedi commento JSDoc sopra), ma il vincolo
-  // unique su numeroProtocollo garantisce che al massimo una richiesta
-  // riesce per ogni progressivo: la seconda fallisce con P2002 e ritenta.
-  // Se count + 1 + tentativo supera 99, estendiamo a 3+ cifre (NCXXX)
-  // per gestire volumi giornalieri molto alti per un singolo utente (caso estremo).
+  // Il vincolo unique su numeroProtocollo garantisce che al massimo una
+  // richiesta riesce per ogni progressivo: la seconda fallisce con P2002
+  // e ritenta col progressivo successivo. Se countBase + tentativo
+  // supera 99, estendiamo a 3+ cifre (NCXXX) per gestire volumi
+  // giornalieri molto alti per un singolo utente (caso estremo).
   for (let tentativo = 0; tentativo < 10; tentativo++) {
-    const count = await db.segnalazione.count({
-      where: {
-        volontarioId: segnalatoreId,
-        dataSegnalazione: { gte: inizioGiornata, lte: fineGiornata },
-        NOT: { numeroProtocollo: null },
-      },
-    });
-    const progressivo = count + 1 + tentativo;
+    const progressivo = countBase + 1 + tentativo;
     // pad2 gestisce correttamente solo valori 0-99; per valori maggiori
     // il numero di protocollo cresce a 3+ cifre.
     const xx = progressivo < 100 ? pad2(progressivo) : String(progressivo);
-    const candidato = `${yyyy}${mm}${gg}-${reg}-${pv}-${nc}${xx}`;
+    const candidato = `${prefisso}${xx}`;
 
     try {
       // Tenta di assegnare il protocollo alla segnalazione.
-      // Se unique fallisce (P2002), una richiesta concorrente ha preso lo
-      // stesso numero: riprova col progressivo successivo.
-      await db.segnalazione.update({
-        where: { id: segnalazioneId },
+      // La clausola WHERE numeroProtocollo: null previene la
+      // sovrascrittura di un protocollo già assegnato (caso di retry
+      // dell'API dopo una partial success, o doppio invio PEC).
+      // updateMany ritorna count=0 se il record ha già un protocollo:
+      // in quel caso consideriamo l'operazione riuscita e ritorniamo
+      // il protocollo esistente (che dobbiamo leggere dal DB).
+      const result = await db.segnalazione.updateMany({
+        where: { id: segnalazioneId, numeroProtocollo: null },
         data: { numeroProtocollo: candidato },
       });
-      return candidato;
+      if (result.count > 0) {
+        return candidato;
+      }
+      // count=0: la segnalazione ha già un protocollo. Recuperiamolo
+      // per ritornarlo al chiamante, evitando di generare un duplicato.
+      const existing = await db.segnalazione.findUnique({
+        where: { id: segnalazioneId },
+        select: { numeroProtocollo: true },
+      });
+      if (existing?.numeroProtocollo) {
+        logger.warn(
+          { segnalazioneId, existing: existing.numeroProtocollo, candidato },
+          "[protocollo] Segnalazione aveva già un numero di protocollo assegnato, restituito quello esistente"
+        );
+        return existing.numeroProtocollo;
+      }
+      // Il record non esiste più (DELETE concorrente?): non possiamo
+      // assegnare il protocollo. Esci con errore.
+      throw new Error(`Segnalazione ${segnalazioneId} non trovata durante assegnazione protocollo`);
     } catch (e) {
       if (
         e instanceof Prisma.PrismaClientKnownRequestError &&

@@ -33,8 +33,8 @@ vi.mock("fs/promises", () => ({
   rm: vi.fn(),
 }));
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  const mockDb = {
     segnalazione: {
       findUnique: vi.fn(),
       findMany: vi.fn(),
@@ -50,10 +50,16 @@ vi.mock("@/lib/db", () => ({
     },
     sessione: {
       findUnique: vi.fn(),
-      delete: vi.fn(),
+      delete: vi.fn().mockResolvedValue({}),
     },
-  },
-}));
+    $transaction: vi.fn(),
+  };
+  mockDb.$transaction.mockImplementation(async (cb) => {
+    if (typeof cb === "function") return cb(mockDb);
+    return Promise.all(cb);
+  });
+  return { db: mockDb };
+});
 
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
@@ -563,9 +569,9 @@ describe("POST /api/segnalazioni/[id]/cambia-stato", () => {
     }));
   });
 
-  it("NON azzera dataChiusura per riapertura forzata chiusa_positiva -> inviata (force=1, transizione non semantica)", async () => {
-    // La transizione chiusa_positiva -> inviata via force=1 è semanticamente
-    // non valida (non si riapre una pratica chiusa direttamente a "inviata").
+  it("NON azzera dataChiusura per riapertura forzata chiusa_positiva -> bozza (force=1, transizione non semantica)", async () => {
+    // La transizione chiusa_positiva -> bozza via force=1 è semanticamente
+    // non valida (non si riapre una pratica chiusa direttamente a "bozza").
     // dataChiusura NON viene azzerata: il record mantiene la data di chiusura.
     mockSession(ADMIN_SESSION);
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
@@ -574,10 +580,10 @@ describe("POST /api/segnalazioni/[id]/cambia-stato", () => {
     vi.mocked(db.segnalazione.updateMany).mockResolvedValue({ count: 1 } as any);
     vi.mocked(db.segnalazione.findUnique).mockResolvedValueOnce({
       id: "s1", volontarioId: "v1", provinciaId: 1, regioneId: 1, stato: "chiusa_positiva",
-    } as any).mockResolvedValueOnce({ id: "s1", stato: "inviata" } as any);
+    } as any).mockResolvedValueOnce({ id: "s1", stato: "bozza" } as any);
     vi.mocked(db.storicoStato.create).mockResolvedValue({} as any);
     await CAMBIA_STATO(
-      makeReq("POST", { stato: "inviata" }, "http://localhost/api/segnalazioni/s1?force=1"),
+      makeReq("POST", { stato: "bozza" }, "http://localhost/api/segnalazioni/s1?force=1"),
       { params: Promise.resolve({ id: "s1" }) }
     );
     // dataChiusura NON deve essere presente nei dati di update
@@ -890,7 +896,7 @@ describe("GET /api/segnalazioni/[id]/lettera", () => {
     vi.mocked(db.allegato.findMany).mockResolvedValue([
       {
         id: "a1", segnalazioneId: "s1",
-        urlStorage: "/api/allegatiplaceholder/s1/old-foto.jpg",
+        urlStorage: "api/allegatiplaceholder/s1/old-foto.jpg",
         nomeOriginale: "old-foto.jpg",
       },
     ] as any);

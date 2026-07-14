@@ -21,7 +21,7 @@ type PraticheResponse = {
   sogliaGiorni: number;
   count: number;
   pratiche: (Segnalazione & {
-    volontario?: { id: string; nomeCognome: string; email: string };
+    volontario?: { id: string; nomeCognome: string; email: string } | null;
   })[];
 };
 
@@ -35,6 +35,7 @@ export function VistaReminder({
   onApriDettaglio: (id: string) => void;
 }) {
   const [data, setData] = useState<PraticheResponse | null>(null);
+  const [errore, setErrore] = useState<boolean>(false);
 
   useEffect(() => {
     if (isDemoSession(user)) {
@@ -45,14 +46,34 @@ export function VistaReminder({
         count: 1,
         pratiche: DEMO_SEGNALAZIONI.filter((s) => s.stato === "in_attesa"),
       });
+      setErrore(false);
       return;
     }
+    let cancelled = false;
+    setErrore(false);
     fetch("/api/reminder")
-      .then((r) => r.json().catch(() => null))
-      .then((d) => {
-        if (d) setData(d);
+      .then(async (r) => {
+        if (!r.ok) {
+          if (!cancelled) setErrore(true);
+          return null;
+        }
+        return r.json().catch(() => null);
       })
-      .catch(console.error);
+      .then((d) => {
+        if (cancelled) return;
+        // Verifica che d sia un oggetto con i campi attesi (non un errore JSON).
+        if (d && typeof d === "object" && !("error" in d)) {
+          setData(d);
+        } else {
+          setErrore(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setErrore(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [user]);
 
   return (
@@ -80,7 +101,19 @@ export function VistaReminder({
         </CardContent>
       </Card>
 
-      {!data ? (
+      {errore ? (
+        <Card className="border-rose-500/40 bg-rose-500/5">
+          <CardContent className="py-10 text-center">
+            <AlertTriangle className="w-10 h-10 mx-auto text-rose-500 mb-3" />
+            <p className="text-rose-700 dark:text-rose-300 font-medium mb-1">
+              Impossibile caricare le pratiche in attesa
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Si è verificato un errore nella comunicazione con il server. Riprova tra qualche istante.
+            </p>
+          </CardContent>
+        </Card>
+      ) : !data ? (
         <Card><CardContent className="py-10 text-center text-muted-foreground">Caricamento...</CardContent></Card>
       ) : data.pratiche.length === 0 ? (
         <Card>
@@ -91,9 +124,14 @@ export function VistaReminder({
         </Card>
       ) : (
         <div className="space-y-2">
-          {data.pratiche.map((s) => {
-            const giorni = s.dataInvio
-              ? Math.floor((Date.now() - new Date(s.dataInvio).getTime()) / (1000 * 60 * 60 * 24))
+          {(data.pratiche ?? []).map((s) => {
+            // Verifica NaN: se dataInvio è una stringa non interpretabile
+            // come data valida, new Date(...).getTime() ritorna NaN e
+            // Math.floor(NaN/...) restituisce NaN. Mostriamo 0 come
+            // fallback per evitare "NaN giorni" in UI.
+            const ts = s.dataInvio ? new Date(s.dataInvio).getTime() : NaN;
+            const giorni = Number.isFinite(ts)
+              ? Math.floor((Date.now() - (ts as number)) / (1000 * 60 * 60 * 24))
               : 0;
             return (
               <Card key={s.id} className="transition-colors hover:border-primary/40">

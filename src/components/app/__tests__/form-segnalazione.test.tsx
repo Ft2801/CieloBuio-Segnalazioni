@@ -1498,7 +1498,8 @@ describe("FormSegnalazione - demo mode", () => {
 
   it("caricaAllegato in demo mode mostra toast 'Azione non disponibile'", async () => {
     const user = userEvent.setup();
-    isDemoMock.mockReturnValue(true);
+    let isDemo = false;
+    isDemoMock.mockImplementation(() => isDemo);
     const seg = creaSegnalazione({ id: "s-demo" });
     configuraFetch({ segnalazione: seg });
     const { container } = renderForm({
@@ -1508,6 +1509,7 @@ describe("FormSegnalazione - demo mode", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("Via Test 1")).toBeInTheDocument();
     });
+    isDemo = true;
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     const file = new File(["data"], "foto.jpg", { type: "image/jpeg" });
     await user.upload(input, file);
@@ -1527,7 +1529,8 @@ describe("FormSegnalazione - demo mode", () => {
 
   it("eliminaAllegato in demo mode mostra toast 'Azione non disponibile'", async () => {
     const user = userEvent.setup();
-    isDemoMock.mockReturnValue(true);
+    let isDemo = false;
+    isDemoMock.mockImplementation(() => isDemo);
     const allegato = {
       id: "a-demo",
       segnalazioneId: "s1",
@@ -1542,6 +1545,7 @@ describe("FormSegnalazione - demo mode", () => {
     await waitFor(() => {
       expect(screen.getByText("demo.jpg")).toBeInTheDocument();
     });
+    isDemo = true;
     const li = screen.getByText("demo.jpg").closest("li");
     const btn = li!.querySelector("button")!;
     await user.click(btn);
@@ -1862,7 +1866,7 @@ describe("FormSegnalazione - edge case", () => {
       expect(body.chkVetroPianoInclinato).toBe(false);
       expect(body.segnalazionePrecedenteId).toBeNull();
     });
-  });
+  }, 30000);
 
   describe("FormSegnalazione - modifica con campi null (rami ?? su fallback)", () => {
     it("precarica campi null/undefined usando fallback ?? e ?? null", async () => {

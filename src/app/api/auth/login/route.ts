@@ -40,34 +40,34 @@ import {
   setSessionCookie,
 } from "@/lib/auth";
 import { checkRateLimit, resetRateLimit } from "@/lib/rate-limit";
-import { verifyTotp } from "@/lib/totp";
+import { verifyTotpWithDelta, computeTotpTimestep } from "@/lib/totp";
 import { logger } from "@/lib/logger";
 
 function getClientIp(req: NextRequest): string {
+  // Preferisci X-Real-IP (impostato dal reverse proxy trust, non dal
+  // client) rispetto a X-Forwarded-For (che può essere spoofato dal
+  // client se il reverse proxy non lo riscrive). In produzione dietro
+  // Caddy, configura Caddy per impostare X-Real-IP dal remote_ip e
+  // per sovrascrivere eventuali X-Forwarded-For client-supplied.
+  const real = req.headers.get("x-real-ip");
+  if (real && real.trim()) return real.trim();
   const forwarded = req.headers.get("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0].trim();
-  const real = req.headers.get("x-real-ip");
-  if (real) return real;
   return "unknown";
 }
 
 // Hash bcrypt di una password fissa nota al sistema, usato come
 // "sentinella" per uniformare i tempi di risposta quando l'utente non
-// esiste. L'hash è pre-calcolato a runtime (lazy init) per evitare di
-// esporre un hash statico nel codice sorgente. La password sottostante
-// NON è mai usata: l'unico scopo è imporre un delay comparabile a
-// bcrypt.compare reale per mitigare il timing attack di user enumeration.
-let sentinelHashPromise: Promise<string> | null = null;
+// esiste. L'hash è pre-calcolato eagerly all'import del modulo (non
+// lazy) per evitare che il primissimo login fallito dopo l'avvio del
+// processo paghi il costo di bcrypt.compare più il costo di
+// bcrypt.hash per la generazione della sentinella, rivelando così un
+// timing side-channel che distinguerebbe il primo login fallito dai
+// successivi.
+const sentinelHashPromise: Promise<string> = hashPassword(
+  "sentinel-password-not-used-for-auth-" + Math.random()
+);
 async function getSentinelHash(): Promise<string> {
-  if (!sentinelHashPromise) {
-    // Lazy init: l'hash è generato una sola volta per processo.
-    // Cost 12 coerente con BCRYPT_COST in auth.ts. Usiamo hashPassword
-    // da @/lib/auth (che usa bcrypt.hash con cost 12) per allineare
-    // il comportamento al resto dell'app e rispettare i mock di test.
-    sentinelHashPromise = hashPassword(
-      "sentinel-password-not-used-for-auth-" + Math.random()
-    );
-  }
   return sentinelHashPromise;
 }
 
@@ -191,12 +191,42 @@ export async function POST(req: NextRequest) {
           { status: 401 }
         );
       }
-      if (!verifyTotp(totpToken, user.totpSecret)) {
+      // Verifica TOTP con delta: il delta è necessario per calcolare
+      // il timestep esatto usato dalla verifica, da registrare come
+      // "ultimo timestep usato" per implementare la protezione
+      // anti-replay (RFC 6238 §5.2: il server deve rifiutare tentativi
+      // di riusare lo stesso codice TOTP).
+      const totpResult = verifyTotpWithDelta(totpToken, user.totpSecret);
+      if (!totpResult.valid) {
         return NextResponse.json(
           { error: "Codice TOTP non valido", requiresTotp: true },
           { status: 401 }
         );
       }
+      // Protezione anti-replay: rifiuta se il timestep usato è <= ultimo
+      // timestep registrato per questo utente. Previene il riuso dello
+      // stesso codice entro la finestra di validità (±30s).
+      const usedTimestep = computeTotpTimestep(new Date(), totpResult.delta);
+      if (user.totpLastUsedTimestep != null && usedTimestep <= user.totpLastUsedTimestep) {
+        logger.warn({ userId: user.id }, "[login] Tentativo di riuso codice TOTP rifiutato (anti-replay)");
+        return NextResponse.json(
+          { error: "Codice TOTP già usato. Attendi un nuovo codice dall'app authenticator.", requiresTotp: true },
+          { status: 401 }
+        );
+      }
+      // Registra il timestep usato per i prossimi check anti-replay.
+      // Non usiamo una transazione: in caso di race concorrente, l'unico
+      // rischio è che due codici uguali vengano accettati simultaneamente
+      // entro la stessa finestra (casi rari, window di 30s). Il rate
+      // limit sul login limita comunque il numero di tentativi.
+      await db.user.update({
+        where: { id: user.id },
+        data: { totpLastUsedTimestep: usedTimestep },
+      }).catch((e: unknown) => {
+        // Non bloccare il login se l'update fallisce: la protezione
+        // anti-replay è defense-in-depth, non un gate di autenticazione.
+        logger.warn({ err: e, userId: user.id }, "[login] Aggiornamento totpLastUsedTimestep fallito (non bloccante)");
+      });
     }
 
     // Login riuscito: resetta entrambi i rate limit

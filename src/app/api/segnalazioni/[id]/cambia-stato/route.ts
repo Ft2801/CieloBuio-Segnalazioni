@@ -17,6 +17,7 @@ import { db } from "@/lib/db";
 import { getSessionUser, canReviewSegnalazioni, hasTerritorialCompetence } from "@/lib/auth";
 import { notificaReferenteNuovaRevisione } from "@/lib/notifiche";
 import { TRANSIZIONI_LECITE } from "@/lib/types";
+import { logger } from "@/lib/logger";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -59,9 +60,22 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Stato non valido" }, { status: 400 });
   }
 
+  // Lo stato "inviata" non è MAI raggiungibile via cambia-stato, nemmeno
+  // con ?force=1: per passare ad "inviata" si DEVE usare /invia-pec che
+  // genera il numero di protocollo, imposta dataInvio e crea il log PEC.
+  // Consentire il force qui bypasserebbe il flusso PEC lasciando una
+  // segnalazione in stato "inviata" senza protocollo, senza dataInvio
+  // e senza log PEC (stato incoerente nei dashboard e nei report).
+  if (nuovoStato === "inviata") {
+    return NextResponse.json(
+      { error: "Lo stato 'inviata' è raggiungibile solo tramite l'endpoint /invia-pec, che genera il numero di protocollo e il log PEC." },
+      { status: 400 }
+    );
+  }
+
   // Verifica che la transizione sia lecita (matrice)
-  const transizioniAmmesse = TRANSIZIONI_LECITE[segnalazione.stato] ?? [];
-  if (!transizioniAmmesse.includes(nuovoStato) && !force) {
+  const transizioniAmmesse = TRANSIZIONI_LECITE[segnalazione.stato as keyof typeof TRANSIZIONI_LECITE] ?? [];
+  if (!transizioniAmmesse.includes(nuovoStato as never) && !force) {
     return NextResponse.json(
       {
         error: `Transizione non ammessa da "${segnalazione.stato}" a "${nuovoStato}". L'amministratore può forzarla con ?force=1.`,
@@ -126,41 +140,58 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const vecchioStato = segnalazione.stato;
-  // Update atomica con clausola WHERE su vecchioStato: previene race
-  // condition tra findUnique e update (lo stato potrebbe cambiare
-  // concorrentemente). Se count=0, lo stato è cambiato: 409 Conflict.
+  // Transazione interattiva: updateMany + storicoStato.create nello stesso
+  // blocco atomico. Se la create di storicoStato fallisce, anche l'updateMany
+  // viene rollbackato, preservando l'invariante "ogni transizione di stato
+  // ha il suo audit record".
   // L'admin con force=1 bypassa la matrice delle transizioni lecite ma
   // resta soggetto al check di atomicità (se lo stato cambia concorrentemente,
   // anche la transizione forzata fallisce con 409).
-  const result = await db.segnalazione.updateMany({
-    where: { id, stato: vecchioStato },
-    data: datiUpdate,
-  });
-  if (result.count === 0) {
+  let aggiornata;
+  try {
+    aggiornata = await db.$transaction(async (tx) => {
+      const result = await tx.segnalazione.updateMany({
+        where: { id, stato: vecchioStato },
+        data: datiUpdate,
+      });
+      if (result.count === 0) {
+        return null;
+      }
+      const seg = await tx.segnalazione.findUnique({ where: { id } });
+      await tx.storicoStato.create({
+        data: {
+          segnalazioneId: id,
+          statoPrecedente: vecchioStato,
+          statoNuovo: nuovoStato,
+          userId: user.id,
+          nota: force && !transizioniAmmesse.includes(nuovoStato)
+            ? `Transizione forzata dall'admin${nota ? `: ${nota}` : ""}`
+            : nota,
+        },
+      });
+      return seg;
+    });
+  } catch (e) {
+    logger.error({ err: e }, "Errore cambia-stato");
+    return NextResponse.json(
+      { error: "Errore interno del server durante la transazione di stato" },
+      { status: 500 }
+    );
+  }
+  if (aggiornata === null) {
     return NextResponse.json(
       { error: "La segnalazione è stata modificata concorrentemente. Ricarica la pagina e riprova." },
       { status: 409 }
     );
   }
 
-  const aggiornata = await db.segnalazione.findUnique({ where: { id } });
-
-  await db.storicoStato.create({
-    data: {
-      segnalazioneId: id,
-      statoPrecedente: vecchioStato,
-      statoNuovo: nuovoStato,
-      userId: user.id,
-      nota: force && !transizioniAmmesse.includes(nuovoStato)
-        ? `Transizione forzata dall'admin${nota ? `: ${nota}` : ""}`
-        : nota,
-    },
-  });
-
   // Notifiche email (async, non bloccanti)
   if (vecchioStato === "bozza" && nuovoStato === "in_revisione") {
     void notificaReferenteNuovaRevisione(id);
   }
 
-  return NextResponse.json({ segnalazione: aggiornata });
+  return NextResponse.json(
+    { segnalazione: aggiornata },
+    { headers: { "Cache-Control": "private, no-store" } }
+  );
 }

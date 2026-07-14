@@ -64,7 +64,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "File non trovato" }, { status: 404 });
     }
     const buffer = await readFile(filePath);
-    const ext = parsed.filename.slice(parsed.filename.lastIndexOf(".")).toLowerCase();
+    const dotIdx = parsed.filename.lastIndexOf(".");
+    const ext = dotIdx >= 0 ? parsed.filename.slice(dotIdx).toLowerCase() : "";
     const mime = EXT_TO_MIME[ext] ?? "application/octet-stream";
     const safeName = allegato.nomeOriginale.replace(/[^\w.\- ]/g, "_").slice(0, 100);
 

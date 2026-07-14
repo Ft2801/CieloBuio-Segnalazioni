@@ -25,7 +25,7 @@ describe("rate-limit cleanup e escalation", () => {
     expect(result.blockCount).toBe(0);
   });
 
-  it("cleanup rimuove entry senza lock dopo 1 ora di inattivita'", () => {
+  it("cleanup rimuove entry senza lock dopo 1 ora di inattività", () => {
     const key = `test-cleanup2-${Date.now()}-${Math.random()}`;
     checkRateLimit(key, 3); // count=1, no lock
     // Avanza oltre 1 ora

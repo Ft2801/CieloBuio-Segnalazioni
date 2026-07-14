@@ -85,7 +85,7 @@ try {
   }
 
   console.log("→ Build statica in corso (output: export)...");
-  execSync("npx next build", { stdio: "inherit", cwd: root });
+  execSync("npx next build", { stdio: "inherit", cwd: root, timeout: 600000 });
 
   console.log(`\nOK Build completata. File statici pronti in: ${outDir}`);
 } finally {

@@ -39,6 +39,7 @@ function Button({
   className,
   variant,
   size,
+  type = "button",
   asChild = false,
   ...props
 }: React.ComponentProps<"button"> &
@@ -50,6 +51,11 @@ function Button({
   return (
     <Comp
       data-slot="button"
+      // Default type="button" invece di "submit" (default HTML):
+      // evita che un Button usato dentro un <form> scateni accidentalmente
+      // il submit. I caller che vogliono il submit devono dichiarare
+      // type="submit" esplicitamente.
+      type={asChild ? undefined : type}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />

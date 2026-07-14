@@ -49,11 +49,11 @@ describe("getRegioneCodice", () => {
   });
 
   it("gestisce stringa vuota", () => {
-    expect(getRegioneCodice("")).toBe("");
+    expect(getRegioneCodice("")).toBe("XXX");
   });
 
   it("gestisce stringa con solo spazi", () => {
-    expect(getRegioneCodice("   ")).toBe("");
+    expect(getRegioneCodice("   ")).toBe("XXX");
   });
 });
 
@@ -84,7 +84,7 @@ describe("getInizialiSegnalatore", () => {
   });
 
   it("gestisce singola parola di 1 char (fallback XX)", () => {
-    expect(getInizialiSegnalatore("M")).toBe("XX");
+    expect(getInizialiSegnalatore("M")).toBe("MX");
   });
 
   it("fallback XX per stringa vuota", () => {

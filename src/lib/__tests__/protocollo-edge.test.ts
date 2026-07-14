@@ -27,7 +27,7 @@ describe("getInizialiSegnalatore - rami fallback", () => {
     expect(getInizialiSegnalatore("\t\n")).toBe("XX");
   });
 
-  it("usa inizialiProtocollo anche se piu lungo di 2 caratteri (tronca a 2)", () => {
+  it("usa inizialiProtocollo anche se più lungo di 2 caratteri (tronca a 2)", () => {
     expect(getInizialiSegnalatore("Mario Rossi", "ABCDE")).toBe("AB");
   });
 
@@ -35,7 +35,7 @@ describe("getInizialiSegnalatore - rami fallback", () => {
     expect(getInizialiSegnalatore("Mario Rossi", "xy")).toBe("XY");
   });
 
-  it("gestisce nomi con piu di 2 parole", () => {
+  it("gestisce nomi con più di 2 parole", () => {
     // Prende la prima lettera della prima parola e la prima lettera della seconda parola
     expect(getInizialiSegnalatore("Mario Antonio Rossi")).toBe("MA");
     expect(getInizialiSegnalatore("Maria Bianchi Verdi")).toBe("MB");
@@ -63,7 +63,7 @@ describe("getRegioneCodice - rami fallback", () => {
   });
 
   it("ritorna stringa vuota per stringa vuota", () => {
-    expect(getRegioneCodice("")).toBe("");
+    expect(getRegioneCodice("")).toBe("XXX");
   });
 
   it("gestisce regione con trattini non mappata", () => {
@@ -90,12 +90,11 @@ describe("getRegioneCodice - rami fallback", () => {
   });
 });
 
-// Test per generaNumeroProtocollo con progressivo >= 100
 vi.mock("@/lib/db", () => ({
   db: {
     segnalazione: {
       count: vi.fn(),
-      update: vi.fn(),
+      updateMany: vi.fn(),
     },
   },
 }));
@@ -111,7 +110,7 @@ describe("generaNumeroProtocollo - progressivo >= 100", () => {
   it("gestisce progressivo >= 100 con 3+ cifre", async () => {
     // count ritorna 99, progressivo = 99 + 1 + 0 = 100 -> 3 cifre
     vi.mocked(db.segnalazione.count).mockResolvedValue(99);
-    vi.mocked(db.segnalazione.update).mockResolvedValue({} as any);
+    vi.mocked(db.segnalazione.updateMany).mockResolvedValue({ count: 1 } as any);
 
     const result = await generaNumeroProtocollo({
       data: new Date(2026, 0, 15),
@@ -125,8 +124,8 @@ describe("generaNumeroProtocollo - progressivo >= 100", () => {
 
     // Il progressivo deve essere 100 (3 cifre, non pad2)
     expect(result).toMatch(/-MR100$/);
-    expect(db.segnalazione.update).toHaveBeenCalledWith({
-      where: { id: "s1" },
+    expect(db.segnalazione.updateMany).toHaveBeenCalledWith({
+      where: { id: "s1", numeroProtocollo: null },
       data: { numeroProtocollo: result },
     });
   });

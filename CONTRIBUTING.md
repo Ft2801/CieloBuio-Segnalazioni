@@ -1,6 +1,6 @@
 # Contribuire a CieloBuio, segnalazioni
 
-Grazie per il tuo interesse nel contribuire al progetto CieloBuio. Questo documento raccoglie le linee guida per chi vuole proporre modifiche, segnalare bug o aggiungere funzionalità.
+Grazie per il tuo interesse nel contribuire al progetto CieloBuio. Questo documento raccoglie le linee guida per chi vuole proporre modifiche, segnalare problemi o aggiungere funzionalità.
 
 ## Contesto del progetto
 
@@ -12,9 +12,9 @@ Prima di contribuire, leggere con attenzione il file [README.md](README.md), in 
 
 Questi vincoli sono la ragione d'essere del progetto e qualsiasi contributo che li violi non potrà essere accettato.
 
-## Come segnalare un bug
+## Come segnalare un problema
 
-1. Verificare che il bug non sia già segnalato nelle issue aperte su
+1. Verificare che il problema non sia già segnalato nelle issue aperte su
    https://github.com/Ft2801/CieloBuio-Segnalazioni/issues
 2. Aprire una nuova issue con:
    - titolo descrittivo
@@ -23,7 +23,7 @@ Questi vincoli sono la ragione d'essere del progetto e qualsiasi contributo che 
    - comportamento osservato
    - versione del software, browser, sistema operativo
    - eventuali screenshot o log
-3. In alternativa, scrivere a fabiot2801@gmail.com (privato, per bug sensibili
+3. In alternativa, scrivere a fabiot2801@gmail.com (privato, per segnalazioni sensibili
    che non vuoi esporre pubblicamente)
 
 ## Come proporre una funzionalità
@@ -39,7 +39,7 @@ Questi vincoli sono la ragione d'essere del progetto e qualsiasi contributo che 
 ## Come inviare una pull request
 
 1. Forkare la repository
-2. Creare un branch descrittivo (`fix/bug-login`, `feature/export-csv`, ecc.)
+2. Creare un branch descrittivo (`feature/export-csv`, `improve/login-flow`, ecc.)
 3. Scrivere codice seguendo le convenzioni esistenti (TypeScript strict, componenti funzionali React, prefisso `use-` per gli hook)
 4. Verificare che il codice compili senza errori:
    ```bash
@@ -91,23 +91,24 @@ Messaggi in italiano, verbo all'infinito, massimo 72 caratteri nel titolo:
 
 ```
 Aggiunge validazione email lato server
-Corregge bug di svuotamento form dopo salvataggio
+Migliora gestione stato form dopo salvataggio
 Rimuove dipendenza non più necessaria
 ```
 
 ## Testing
 
-Il progetto ha una suite di **1561 test automatici** con **Vitest**:
+Il progetto ha una suite di **1562 test automatici** con **Vitest**:
 
-- **482 test unitari** su `src/lib/` con coverage 100% (statements, branches, functions, lines)
+- **396 test unitari** su `src/lib/` con coverage 100% (statements, branches, functions, lines) sui file inclusi (esclusi `types.ts`, `demo-data.ts`, `db.ts`, `logger.ts`)
 - **460 test di integrazione** su tutte le 30 API routes in `src/app/api/__tests__/` con mock di DB (Prisma), next/headers, nodemailer, bcryptjs, fs/promises
-- **80 test di sicurezza informatica** in `src/__tests__/security-attack-suite.test.ts` organizzati per OWASP Top 10 (IDOR, injection, CSRF, XSS, path traversal, brute force, session fixation, file upload spoofing, GDPR, TOTP 2FA)
+- **75 test di sicurezza informatica** in `src/__tests__/security-attack-suite.test.ts` organizzati per OWASP Top 10 (IDOR, injection, CSRF, XSS, path traversal, brute force, session fixation, file upload spoofing, GDPR, TOTP 2FA)
+- **33 test** su feature enterprise in `src/__tests__/enterprise-features.test.ts` (health, docs, metrics, TOTP anti-lockout, backup encryption)
 - **25 test** su `src/middleware.ts` (security headers, CSRF, fail-closed)
-- **38 test** su 12 componenti UI shadcn/ui
+- **56 test** su 13 componenti UI shadcn/ui
 - **20 test** su `src/hooks/use-toast.ts`
-- **530 test** su 9 componenti app (AutoreLink, LoginScreen, VistaReminder, Dashboard, ListaSegnalazioni, AppShell, DettaglioSegnalazione, FormSegnalazione, PannelloAdmin)
+- **473 test** su 10 componenti app (AutoreLink, LoginScreen, VistaReminder, Dashboard, ListaSegnalazioni, AppShell, DettaglioSegnalazione, FormSegnalazione, PannelloAdmin)
 - **15 test** su `src/app/layout.tsx` e `src/app/page.tsx`
-- **7 test** su `scripts/cron-jobs.ts`
+- **8 test** su `scripts/cron-jobs.ts`
 
 Quando si contribuisce:
 
@@ -118,7 +119,7 @@ Quando si contribuisce:
   - `src/app/api/__tests__/` (per route handler)
   - `src/components/app/__tests__/` (per componenti React)
   - `src/components/ui/__tests__/` (per componenti UI)
-- Mantenere la coverage al 100% su `src/lib/`, `src/middleware.ts`, `src/hooks/`, `src/components/ui/`, `src/app/api/`, `src/app/layout.tsx`, `src/app/page.tsx`, `scripts/cron-jobs.ts`
+- Mantenere la coverage al 100% su `src/lib/`, `src/middleware.ts`, `src/hooks/`, `src/components/ui/`, `src/app/api/`, `src/app/layout.tsx`, `src/app/page.tsx`, `scripts/cron-jobs.ts` (esclusioni documentate in `vitest.config.ts`: `types.ts`, `demo-data.ts`, `db.ts`, `logger.ts`, `health/route.ts`, `toast.tsx`, script CLI)
 - Per i componenti app complessi, ogni nuovo ramo condizionale deve essere coperto da almeno un test
 - Per le API routes, ogni nuovo endpoint deve avere test di integrazione che coprono: 401/403 (autenticazione), 400 (validazione), 404 (not found), 409 (race condition se applicabile), 200/201 (successo), 500 (errore DB)
 - Verificare la responsività mobile (viewport 375px)

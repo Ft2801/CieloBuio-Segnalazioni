@@ -45,6 +45,7 @@ export function Dashboard({
   onNavigate: (vista: string, params?: Record<string, unknown>) => void;
 }) {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [statsError, setStatsError] = useState(false);
 
   useEffect(() => {
     if (isDemoSession(user)) {
@@ -53,12 +54,28 @@ export function Dashboard({
       setStats(DEMO_STATS);
       return;
     }
+    // Verifica r.ok prima di usare i dati: una risposta 401/500 con body
+    // JSON {error: ...} non verrebbe riconosciuta come errore senza questo
+    // check, e i suoi campi verrebbero usati come stats valide mostrando
+    // 0 ovunque invece di un messaggio di errore.
     fetch("/api/stats")
-      .then((r) => r.json().catch(() => null))
-      .then((data) => {
-        if (data) setStats(data);
+      .then(async (r) => {
+        if (!r.ok) {
+          setStatsError(true);
+          setStats(null);
+          return null;
+        }
+        return r.json().catch(() => null);
       })
-      .catch(console.error);
+      .then((data) => {
+        if (data && typeof data === "object" && !("error" in data)) {
+          setStats(data);
+          setStatsError(false);
+        }
+      })
+      .catch(() => {
+        setStatsError(true);
+      });
   }, [user]);
 
   const cards = [
@@ -170,16 +187,41 @@ export function Dashboard({
         </Card>
       ) : null}
 
+      {statsError && (
+        <Card className="border-rose-500/40 bg-rose-500/5">
+          <CardContent className="pt-6 flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-rose-500 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-rose-800 dark:text-rose-200">
+                Impossibile caricare le statistiche
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Verifica la connessione al server. Se il problema persiste, ricarica la pagina.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {cards.map((c) => (
           <Card
             key={c.label}
             className={
               c.stato
-                ? "cursor-pointer hover:border-primary/40 hover:bg-accent/30 transition-colors"
+                ? "cursor-pointer hover:border-primary/40 hover:bg-accent/30 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 : ""
             }
             onClick={() => c.stato && onNavigate("lista", { stato: c.stato })}
+            onKeyDown={(e) => {
+              if (c.stato && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                onNavigate("lista", { stato: c.stato });
+              }
+            }}
+            role={c.stato ? "button" : undefined}
+            tabIndex={c.stato ? 0 : undefined}
+            aria-label={c.stato ? `Apri lista segnalazioni in stato ${c.label}` : undefined}
           >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-xs font-medium text-muted-foreground">

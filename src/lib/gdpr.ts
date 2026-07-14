@@ -19,24 +19,66 @@ import path from "path";
  * Oltre a cancellare i record DB degli allegati, cancella anche i file
  * fisici su disco in storage/uploads/<segnalazioneId>/, coerente
  * con quanto dichiarato in PRIVACY.md e SECURITY.md.
+ *
+ * Le operazioni DB (eliminazione allegati + aggiornamento segnalazione +
+ * creazione storico) sono racchiuse in una transazione: se una delle tre
+ * fallisce, l'intera anonimizzazione viene rollbackata e l'errore
+ * propagato al chiamante. La cancellazione dei file fisici avviene
+ * solo dopo il commit della transazione (best-effort): un eventuale
+ * fallimento del rm non invalida l'anonimizzazione DB, e i file orfani
+ * vengono rimossi successivamente dal cron cleanupFileOrfani.
  */
 export async function anonimizzaSegnalazione(
   segnalazioneId: string,
   retentionAnni: number,
   userId: string | null = null
 ): Promise<void> {
-  // Recupera gli allegati prima di cancellarli dal DB (per avere gli urlStorage)
+  // Recupera gli allegati prima di cancellarli (per logging).
   const allegati = await db.allegato.findMany({
     where: { segnalazioneId },
     select: { id: true, urlStorage: true },
   });
 
-  // Elimina i record DB degli allegati
-  await db.allegato.deleteMany({
-    where: { segnalazioneId },
-  });
+  // Transazione DB: elimina allegati + anonimizza segnalazione + storico.
+  // Se una delle tre operazioni fallisce, l'intera transazione viene
+  // rollbackata, preservando l'integrità referenziale e l'audit trail.
+  await db.$transaction([
+    db.allegato.deleteMany({ where: { segnalazioneId } }),
+    db.segnalazione.update({
+      where: { id: segnalazioneId },
+      data: {
+        volontarioId: null,
+        indirizzoVia: "[ANONIMIZZATA]",
+        // Il CAP viene azzerato: in comuni piccoli con pochi CAP, il CAP
+        // residuo potrebbe restringere sensibilmente l'area geografica
+        // anche dopo l'anonimizzazione di indirizzo e coordinate.
+        // comuneId/provinciaId/regioneId restano per valore statistico,
+        // ma a livello di regione/provincia (non singolo CAP).
+        cap: null,
+        nomeEsercizio: null,
+        latitudine: null,
+        longitudine: null,
+        descrizioneLibera: "[ANONIMIZZATA per scadenza retention]",
+        notaAltroTipologia: null,
+        notaAltroProblema: null,
+        testoIntroduttivoPec: null,
+        pecCcAggiuntive: null,
+      },
+    }),
+    db.storicoStato.create({
+      data: {
+        segnalazioneId,
+        statoPrecedente: null,
+        statoNuovo: null,
+        userId,
+        nota: `Anonimizzazione GDPR: segnalazione chiusa da più di ${retentionAnni} anni. Dati personali rimossi, allegati eliminati (DB e file fisici).`,
+      },
+    }),
+  ]);
 
-  // Elimina i file fisici su disco
+  // Elimina i file fisici su disco (best-effort, dopo commit DB).
+  // Se il rm fallisce, i file orfani verranno rimossi dal cron
+  // cleanupFileOrfani nella prossima esecuzione.
   const segnalazioneDir = path.resolve(UPLOADS_ROOT, segnalazioneId);
 
   // Verifica che il path sia dentro UPLOADS_ROOT (defense-in-depth)
@@ -51,44 +93,12 @@ export async function anonimizzaSegnalazione(
       logger.info({ segnalazioneId, filesDeleted: allegati.length }, "File fisici allegati eliminati durante anonimizzazione GDPR");
     } catch (e) {
       // La directory potrebbe non esistere (allegati caricati ma poi mossi)
-      // o esser già stata cancellata. Logga ma non bloccare l'anonimizzazione.
-      logger.warn({ segnalazioneId, err: e }, "Impossibile eliminare file fisici durante anonimizzazione GDPR (non bloccante)");
+      // o esser già stata cancellata. Logga ma non bloccare l'anonimizzazione
+      // (la transazione DB è già committata). I file orfani saranno
+      // rimossi dal cron cleanupFileOrfani.
+      logger.warn({ segnalazioneId, err: e }, "Impossibile eliminare file fisici durante anonimizzazione GDPR (non bloccante, cleanupFileOrfani rimuoverà gli orfani)");
     }
   }
-
-  // Anonimizza la segnalazione
-  await db.segnalazione.update({
-    where: { id: segnalazioneId },
-    data: {
-      volontarioId: null,
-      indirizzoVia: "[ANONIMIZZATA]",
-      // Il CAP viene azzerato: in comuni piccoli con pochi CAP, il CAP
-      // residuo potrebbe restringere sensibilmente l'area geografica
-      // anche dopo l'anonimizzazione di indirizzo e coordinate.
-      // comuneId/provinciaId/regioneId restano per valore statistico,
-      // ma a livello di regione/provincia (non singolo CAP).
-      cap: null,
-      nomeEsercizio: null,
-      latitudine: null,
-      longitudine: null,
-      descrizioneLibera: "[ANONIMIZZATA per scadenza retention]",
-      notaAltroTipologia: null,
-      notaAltroProblema: null,
-      testoIntroduttivoPec: null,
-      pecCcAggiuntive: null,
-    },
-  });
-
-  // Registra l'evento di anonimizzazione nello storico
-  await db.storicoStato.create({
-    data: {
-      segnalazioneId,
-      statoPrecedente: null,
-      statoNuovo: null,
-      userId,
-      nota: `Anonimizzazione GDPR: segnalazione chiusa da più di ${retentionAnni} anni. Dati personali rimossi, allegati eliminati (DB e file fisici).`,
-    },
-  });
 
   logger.info({ segnalazioneId, retentionAnni }, "Segnalazione anonimizzata per GDPR retention");
 }

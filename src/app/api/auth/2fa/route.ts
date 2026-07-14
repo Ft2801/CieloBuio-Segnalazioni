@@ -40,7 +40,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSessionUser } from "@/lib/auth";
-import { generateTotpSecret, generateTotpUri, verifyTotp } from "@/lib/totp";
+import {
+  generateTotpSecret,
+  generateTotpUri,
+  verifyTotpWithDelta,
+  computeTotpTimestep,
+} from "@/lib/totp";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 
@@ -70,7 +75,7 @@ export async function POST(req: NextRequest) {
     // possa disarmare il 2FA senza conoscere il vecchio codice).
     const dbUser = await db.user.findUnique({
       where: { id: user.id },
-      select: { totpSecret: true, totpVerifiedAt: true },
+      select: { totpSecret: true, totpVerifiedAt: true, totpLastUsedTimestep: true },
     });
     if (dbUser?.totpVerifiedAt && dbUser.totpSecret) {
       const currentToken = typeof body.currentToken === "string" ? body.currentToken.trim() : "";
@@ -80,12 +85,31 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
-      if (!verifyTotp(currentToken, dbUser.totpSecret)) {
+      // Anti-replay: usa verifyTotpWithDelta + timestep check, coerente
+      // con il login. Previene riuso di un codice già utilizzato per il
+      // login entro la finestra di validità di 30 secondi.
+      const result = verifyTotpWithDelta(currentToken, dbUser.totpSecret);
+      if (!result.valid) {
         return NextResponse.json(
           { error: "Codice TOTP corrente non valido" },
           { status: 400 }
         );
       }
+      const timestep = computeTotpTimestep(new Date(), result.delta);
+      if (
+        dbUser.totpLastUsedTimestep !== null &&
+        timestep <= dbUser.totpLastUsedTimestep
+      ) {
+        return NextResponse.json(
+          { error: "Codice TOTP già utilizzato. Attendi un nuovo codice dalla tua app." },
+          { status: 400 }
+        );
+      }
+      // Aggiorna totpLastUsedTimestep per marcare questo codice come usato.
+      await db.user.update({
+        where: { id: user.id },
+        data: { totpLastUsedTimestep: timestep },
+      });
     }
 
     // Genera nuovo secret. Il parametro email NON è usato dal generatore
@@ -130,7 +154,7 @@ export async function POST(req: NextRequest) {
 
     const dbUser = await db.user.findUnique({
       where: { id: user.id },
-      select: { totpSecret: true, totpVerifiedAt: true },
+      select: { totpSecret: true, totpVerifiedAt: true, totpLastUsedTimestep: true },
     });
     if (!dbUser || !dbUser.totpSecret) {
       return NextResponse.json(
@@ -139,17 +163,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!verifyTotp(token, dbUser.totpSecret)) {
+    // Verifica anti-replay coerente con il login e con i rami setup/disable:
+    // usa verifyTotpWithDelta + check sul timestep, così un codice già usato
+    // per il login non può essere riutilizzato per confermare la verify.
+    const result = verifyTotpWithDelta(token, dbUser.totpSecret);
+    if (!result.valid) {
       return NextResponse.json(
         { error: "Token TOTP non valido" },
         { status: 400 }
       );
     }
+    const timestep = computeTotpTimestep(new Date(), result.delta);
+    if (
+      dbUser.totpLastUsedTimestep !== null &&
+      timestep <= dbUser.totpLastUsedTimestep
+    ) {
+      return NextResponse.json(
+        { error: "Codice TOTP già utilizzato. Attendi un nuovo codice dalla tua app." },
+        { status: 400 }
+      );
+    }
 
     // Marca il 2FA come verificato: da ora il login richiederà il codice.
+    // Aggiorna anche totpLastUsedTimestep per marcare questo codice come usato.
     await db.user.update({
       where: { id: user.id },
-      data: { totpVerifiedAt: new Date() },
+      data: { totpVerifiedAt: new Date(), totpLastUsedTimestep: timestep },
     });
 
     logger.info({ userId: user.id }, "2FA verificato e attivato (totpVerifiedAt impostato)");
@@ -172,7 +211,7 @@ export async function POST(req: NextRequest) {
 
     const dbUser = await db.user.findUnique({
       where: { id: user.id },
-      select: { totpSecret: true, totpVerifiedAt: true },
+      select: { totpSecret: true, totpVerifiedAt: true, totpLastUsedTimestep: true },
     });
     if (!dbUser || !dbUser.totpSecret) {
       return NextResponse.json(
@@ -185,12 +224,33 @@ export async function POST(req: NextRequest) {
     // Se è in stato "setup ma non verificato", permetti la disabilitazione
     // senza token (permette all'utente di annullare un setup incompleto).
     if (dbUser.totpVerifiedAt) {
-      if (!verifyTotp(token, dbUser.totpSecret)) {
+      // Anti-replay: usa verifyTotpWithDelta + timestep check, coerente
+      // con il login e il setup. Previene che un attaccante con sessione
+      // rubata e un codice TOTP intercettato riesca a disarmare il 2FA.
+      const result = verifyTotpWithDelta(token, dbUser.totpSecret);
+      if (!result.valid) {
         return NextResponse.json(
           { error: "Token TOTP non valido" },
           { status: 400 }
         );
       }
+      const timestep = computeTotpTimestep(new Date(), result.delta);
+      if (
+        dbUser.totpLastUsedTimestep !== null &&
+        timestep <= dbUser.totpLastUsedTimestep
+      ) {
+        return NextResponse.json(
+          { error: "Codice TOTP già utilizzato. Attendi un nuovo codice dalla tua app." },
+          { status: 400 }
+        );
+      }
+      // Aggiorna totpLastUsedTimestep PRIMA di azzerare il secret: così,
+      // se l'update dell'azzeramento fallisce, il codice resta marcato
+      // come usato e un eventuale retry non può riutilizzarlo.
+      await db.user.update({
+        where: { id: user.id },
+        data: { totpLastUsedTimestep: timestep },
+      });
     }
 
     await db.user.update({
@@ -198,6 +258,7 @@ export async function POST(req: NextRequest) {
       data: {
         totpSecret: null,
         totpVerifiedAt: null,
+        totpLastUsedTimestep: null,
       },
     });
 

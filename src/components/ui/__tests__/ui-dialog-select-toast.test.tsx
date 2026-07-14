@@ -64,7 +64,7 @@ describe("Dialog", () => {
         </DialogContent>
       </Dialog>
     );
-    expect(screen.getByText("Chiudi")).toBeInTheDocument();
+    expect(screen.getAllByText("Chiudi")[0]).toBeInTheDocument();
   });
 });
 

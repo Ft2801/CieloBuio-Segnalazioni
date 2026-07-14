@@ -1,16 +1,44 @@
 # CieloBuio Segnalazioni - Docker Compose
 # Ambiente completo: app + PostgreSQL + Caddy (reverse proxy)
 # Autore: Fabio Tempera (2026)
-
-version: "3.9"
+#
+# Variabili d'ambiente obbligatorie (impostare in .env o shell):
+#   DB_PASSWORD           Password del database PostgreSQL
+#
+# Variabili opzionali (con default):
+#   NEXT_PUBLIC_BASE_URL  URL pubblico dell'app (per CSRF e PEC)
+#   PEC_SMTP_*            Credenziali SMTP per invio PEC
+#   BACKUP_ENCRYPTION_KEY Chiave Base64 (32 byte) per cifrare i backup
+#   METRICS_TOKEN         Token per /api/metrics (Prometheus)
 
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
+      # NEXT_PUBLIC_* sono inlineate dal bundle client in fase di build:
+      # vanno passate come build args, non solo come environment runtime.
+      args:
+        - NEXT_PUBLIC_BASE_URL=${NEXT_PUBLIC_BASE_URL:-https://segnalazioni.esempio.it}
     container_name: cielobuio-app
     restart: unless-stopped
+    # Hardening: l'app non ha bisogno di privilegi. Rimuoviamo tutte le
+    # capabilities Linux e impediamo escalation di privilegi. Il Dockerfile
+    # già esegue come utente non-root (nextjs, UID 1001), queste direttive
+    # sono defense-in-depth aggiuntiva a livello di compose.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Filesystem read-only con tmpfs per le directory scrivibili: previene
+    # persistenza di binari arbitrari in caso di compromissione del
+    # processo Node. Le directory scrivibili sono /tmp (generica) e /app/.next/cache
+    # (cache di build di Next). storage/uploads e backups sono montati come
+    # volumi Docker espliciti, quindi scrivibili anche con read_only: true.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,size=64m
+      - /app/.next/cache:rw,size=128m
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://cielobuio:${DB_PASSWORD:?DB_PASSWORD obbligatoria - imposta una password sicura}@db:5432/cielobuio_segnalazioni?schema=public
@@ -23,13 +51,40 @@ services:
       - RETENTION_SEGNALAZIONI_ANNI=${RETENTION_SEGNALAZIONI_ANNI:-10}
       - TRANSIZIONE_INVIATA_GIORNI=${TRANSIZIONE_INVIATA_GIORNI:-7}
       - REMINDER_GIORNI=${REMINDER_GIORNI:-30}
+      # Cifratura at-rest dei backup: senza questa chiave i backup sono
+      # in chiaro su disco (pericoloso in produzione). Generare con:
+      #   openssl rand -base64 32
+      - BACKUP_ENCRYPTION_KEY=${BACKUP_ENCRYPTION_KEY:-}
+      - BACKUP_DIR=/backups
+      # Token per /api/metrics (Prometheus). Generare con:
+      #   openssl rand -hex 32
+      - METRICS_TOKEN=${METRICS_TOKEN:-}
+      # STORAGE_ROOT permette di montare il storage su un volume diverso
+      # da quello di default (process.cwd()/storage), utile in container.
+      - STORAGE_ROOT=/app/storage/uploads
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
       - app-storage:/app/storage
+      # Mount separato per i backup: persiste oltre il ciclo di vita
+      # del container app, così i backup non vengono persi al ricreare
+      # il container (es. dopo un upgrade di immagine).
+      - backups:/backups
     depends_on:
       db:
         condition: service_healthy
+    # Limiti di risorse per prevenire OOM del host in caso di memory leak.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    # Log rotation: senza questa config il driver json-file cresce illimitatamente.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - cielobuio-net
 
@@ -37,6 +92,11 @@ services:
     image: postgres:16-alpine
     container_name: cielobuio-db
     restart: unless-stopped
+    # Hardening: PostgreSQL non richiede capabilities speciali.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       - POSTGRES_DB=cielobuio_segnalazioni
       - POSTGRES_USER=cielobuio
@@ -48,6 +108,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - cielobuio-net
 
@@ -55,6 +120,19 @@ services:
     image: caddy:2-alpine
     container_name: cielobuio-caddy
     restart: unless-stopped
+    # Hardening: Caddy ha bisogno di cap_net_bind_service per legare le
+    # porte 80/443 (<1024) come non-root. Tutte le altre capabilities
+    # vengono rimosse.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    # Caddy imposta UPSTREAM_HOST per raggiungere il service app nella
+    # rete Docker interna (default nel Caddyfile).
+    environment:
+      - UPSTREAM_HOST=app:3000
     ports:
       - "80:80"
       - "443:443"
@@ -62,16 +140,25 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+      - caddy-logs:/var/log/caddy
     depends_on:
-      - app
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - cielobuio-net
 
 volumes:
   app-storage:
+  backups:
   db-data:
   caddy-data:
   caddy-config:
+  caddy-logs:
 
 networks:
   cielobuio-net:

@@ -107,7 +107,7 @@ describe("nuovoUtenteSchema", () => {
   it("accetta utente completo con tutti i campi", () => {
     const result = nuovoUtenteSchema.safeParse({
       ...valido,
-      ruolo: "admin",
+      ruolo: "referente_provinciale",
       provinciaId: 1,
       pec: "test@pec.it",
       emailOrdinaria: "test@ord.it",
@@ -118,7 +118,7 @@ describe("nuovoUtenteSchema", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.ruolo).toBe("admin");
+      expect(result.data.ruolo).toBe("referente_provinciale");
       expect(result.data.attivo).toBe(false);
       expect(result.data.inizialiProtocollo).toBe("MR");
     }
@@ -276,7 +276,7 @@ describe("validaPecCcAggiuntive", () => {
     const result = validaPecCcAggiuntive("a@b.it; c@d.it; e@f.it; g@h.it; i@l.it");
     expect(result.ok).toBe(true);
   });
-  it("rifiuta piu di 5 email", () => {
+  it("rifiuta più di 5 email", () => {
     const input = "a@b.it; c@d.it; e@f.it; g@h.it; i@l.it; m@n.it";
     const result = validaPecCcAggiuntive(input);
     expect(result.ok).toBe(false);

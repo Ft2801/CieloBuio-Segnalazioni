@@ -15,8 +15,8 @@ import { NextRequest } from "next/server";
 
 vi.mock("next/headers", () => ({ cookies: vi.fn() }));
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  const inner = {
     segnalazione: {
       findMany: vi.fn(),
       count: vi.fn(),
@@ -35,8 +35,27 @@ vi.mock("@/lib/db", () => ({
       deleteMany: vi.fn(),
       delete: vi.fn(),
     },
-  },
-}));
+  };
+  // $transaction supporta due forme in Prisma:
+  //  - array di PrismaPromise: ritorna Promise<result[]>
+  //  - callback interattiva (tx) => Promise<T>: ritorna Promise<T>
+  // Il mock gestisce entrambe: se l'argomento è una funzione, la esegue
+  // passandogli `inner` come "tx"; se è un array, esegue tutte le promise
+  // in parallelo e ritorna i risultati.
+  const dbMock = {
+    ...inner,
+    $transaction: vi.fn(async (arg: unknown) => {
+      if (typeof arg === "function") {
+        return (arg as (tx: typeof inner) => Promise<unknown>)(inner);
+      }
+      if (Array.isArray(arg)) {
+        return Promise.all(arg);
+      }
+      return undefined;
+    }),
+  };
+  return { db: dbMock };
+});
 
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";

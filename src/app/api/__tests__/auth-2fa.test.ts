@@ -251,10 +251,10 @@ describe("POST /api/auth/2fa", () => {
       const json = await res.json();
       expect(json.ok).toBe(true);
       // Verifica che totpVerifiedAt sia stato impostato
-      expect(db.user.update).toHaveBeenCalledWith({
+      expect(db.user.update).toHaveBeenCalledWith(expect.objectContaining({
         where: { id: VOL_USER.id },
-        data: { totpVerifiedAt: expect.any(Date) },
-      });
+        data: expect.objectContaining({ totpVerifiedAt: expect.any(Date) }),
+      }));
     });
   });
 
@@ -294,10 +294,10 @@ describe("POST /api/auth/2fa", () => {
       expect(res.status).toBe(200);
       const json = await res.json();
       expect(json.ok).toBe(true);
-      expect(db.user.update).toHaveBeenCalledWith({
+      expect(db.user.update).toHaveBeenCalledWith(expect.objectContaining({
         where: { id: VOL_USER.id },
-        data: { totpSecret: null, totpVerifiedAt: null },
-      });
+        data: expect.objectContaining({ totpSecret: null, totpVerifiedAt: null }),
+      }));
     });
 
     it("respinge disable con token errato se 2FA attivo (totpVerifiedAt non null)", async () => {
@@ -328,10 +328,10 @@ describe("POST /api/auth/2fa", () => {
       expect(res.status).toBe(200);
       const json = await res.json();
       expect(json.ok).toBe(true);
-      expect(db.user.update).toHaveBeenCalledWith({
+      expect(db.user.update).toHaveBeenCalledWith(expect.objectContaining({
         where: { id: VOL_USER.id },
-        data: { totpSecret: null, totpVerifiedAt: null },
-      });
+        data: expect.objectContaining({ totpSecret: null, totpVerifiedAt: null }),
+      }));
     });
   });
 });

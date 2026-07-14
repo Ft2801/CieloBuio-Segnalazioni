@@ -16,19 +16,28 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 
+# Variabili NEXT_PUBLIC_* sono inlineate da Next.js nel bundle client
+# in fase di build. Per averle disponibili nel bundle, vanno passate
+# come ARG e rese disponibili come ENV prima di `next build`.
+ARG NEXT_PUBLIC_BASE_URL=https://segnalazioni.esempio.it
+ENV NEXT_PUBLIC_BASE_URL=$NEXT_PUBLIC_BASE_URL
+
 # Copia file di dipendenze e lockfile per installazione riproducibile.
 # npm ci richiede package-lock.json e fallisce se non è sincronizzato
 # con package.json, garantendo che l'installazione sia deterministica.
+# L'ordine (deps prima, sorgenti dopo) sfrutta la cache dei layer Docker:
+# solo i cambiamenti a package.json invalidano il layer npm ci.
 COPY package.json package-lock.json ./
-COPY prisma ./prisma/
 
 # Installa dipendenze in modalità deterministica (--ci).
 RUN npm ci
 
-# Genera Prisma client
+# Genera Prisma client (richiede schema)
+COPY prisma ./prisma/
 RUN npx prisma generate
 
-# Copia sorgenti
+# Copia sorgenti (questo layer cambia spesso, ma la dipendenza npm ci
+# è già cachata dal layer precedente).
 COPY . .
 
 # Build standalone
@@ -45,6 +54,9 @@ ENV PORT=3000
 # Crea utente non-root
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
+
+# curl per health check più affidabile di wget --spider (BusyBox).
+RUN apk add --no-cache curl
 
 # Copia standalone output
 COPY --from=builder /app/.next/standalone ./
@@ -64,14 +76,17 @@ COPY --from=builder /app/node_modules/@esbuild ./node_modules/@esbuild
 COPY --from=builder /app/node_modules/get-ts-avx-wasm ./node_modules/get-ts-avx-wasm
 COPY --from=builder /app/package.json ./package.json
 
-# Crea directory storage
-RUN mkdir -p storage/uploads && chown -R nextjs:nodejs storage
+# Crea directory storage e backups con permessi corretti per l'utente non-root
+RUN mkdir -p storage/uploads /backups && \
+    chown -R nextjs:nodejs storage /backups
 
 USER nextjs
 
 EXPOSE 3000
 
+# Health check con curl: più affidabile di wget --spider su Alpine BusyBox,
+# dove il flag --spider ha comportamenti inconsistenti tra versioni.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+  CMD curl -sf http://localhost:3000/api/health || exit 1
 
 CMD ["node", "server.js"]

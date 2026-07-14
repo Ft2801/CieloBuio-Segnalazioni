@@ -21,29 +21,83 @@ type NotificaEmail = {
 };
 
 // Transporter SMTP cached a livello di modulo (evita di ricreare
-// la connessione TLS a ogni chiamata)
+// la connessione TLS a ogni chiamata). La chiave di cache include host,
+// porta, utente e password così che una rotazione delle credenziali via
+// env produca un nuovo transporter invece di riusare quello obsoleto.
 let cachedTransporter: nodemailer.Transporter | null = null;
+let cachedKey = "";
+
+function buildTransporterKey(): string {
+  return `${process.env.PEC_SMTP_HOST ?? ""}:${process.env.PEC_SMTP_PORT ?? "465"}:${process.env.PEC_SMTP_USER ?? ""}:${process.env.PEC_SMTP_PASSWORD ?? ""}`;
+}
 
 function getTransporter(): nodemailer.Transporter {
-  if (!cachedTransporter) {
+  const key = buildTransporterKey();
+  if (!cachedTransporter || cachedKey !== key) {
+    const rawPort = process.env.PEC_SMTP_PORT ?? "465";
+    const port = Number(rawPort);
+    // Validazione difensiva del numero di porta: un valore non numerico
+    // (es. "abc" impostato per errore nel .env) produrrebbe NaN,
+    // creando un transporter non funzionante che fallirebbe con errori
+    // criptici al primo invio. In tal caso fallback alla porta di
+    // default (465) e logga un warning per segnalare la configurazione.
+    const portValida = Number.isInteger(port) && port >= 1 && port <= 65535;
+    const portFinale = portValida ? port : 465;
+    if (!portValida) {
+      logger.warn(
+        { rawPort },
+        "PEC_SMTP_PORT non valido (deve essere un intero 1-65535), uso 465 come fallback"
+      );
+    }
+    // secure:true è corretto solo per la porta 465 (implicit TLS).
+    // Per 587 (STARTTLS) va usato secure:false con requireTLS:true,
+    // altrimenti il transporter non connette. Per altre porte
+    // inferiamo secure dal valore di porta (465 = implicit TLS).
+    const isImplicitTls = portFinale === 465;
+    // Se stiamo sostituendo un transporter precedente (rotazione credenziali
+    // via env), chiudiamo esplicitamente la connessione del vecchio per
+    // evitare leak di socket e handle TCP librati dopo la sostituzione.
+    const vecchio = cachedTransporter;
     cachedTransporter = nodemailer.createTransport({
       host: process.env.PEC_SMTP_HOST!,
-      port: Number(process.env.PEC_SMTP_PORT ?? 465),
-      secure: true,
+      port: portFinale,
+      secure: isImplicitTls,
+      requireTLS: !isImplicitTls,
       auth: {
         user: process.env.PEC_SMTP_USER,
         pass: process.env.PEC_SMTP_PASSWORD,
       },
     });
+    cachedKey = key;
+    if (vecchio) {
+      // close() del vecchio transporter: lo invochiamo per rilasciare le
+      // socket TCP residue. Alcune versioni di nodemailer ritornano void,
+      // altre Promise<void>: gestiamo entrambi i casi. L'eventuale
+      // rejection viene loggata a livello debug (non blocca il flusso).
+      try {
+        const maybePromise = vecchio.close() as unknown;
+        if (maybePromise && typeof (maybePromise as Promise<unknown>).catch === "function") {
+          (maybePromise as Promise<unknown>).catch((e: unknown) => {
+            logger.debug({ err: e }, "Errore non bloccante nella chiusura del vecchio transporter SMTP");
+          });
+        }
+      } catch (e) {
+        logger.debug({ err: e }, "Errore sincrono nella chiusura del vecchio transporter SMTP");
+      }
+    }
   }
   return cachedTransporter;
 }
 
-async function inviaEmail(notifica: NotificaEmail): Promise<boolean> {
+type InviaEmailResult =
+  | { ok: true }
+  | { ok: false; reason: "demo" | "error"; error?: unknown };
+
+async function inviaEmail(notifica: NotificaEmail): Promise<InviaEmailResult> {
   const host = process.env.PEC_SMTP_HOST;
   if (!host) {
     logger.info({ to: notifica.to, subject: notifica.subject }, "[DEMO] Notifica email (SMTP non configurato)");
-    return false;
+    return { ok: false, reason: "demo" };
   }
   try {
     const transporter = getTransporter();
@@ -53,10 +107,10 @@ async function inviaEmail(notifica: NotificaEmail): Promise<boolean> {
       subject: notifica.subject,
       text: notifica.text,
     });
-    return true;
+    return { ok: true };
   } catch (e) {
     logger.error({ err: e, to: notifica.to, subject: notifica.subject }, "Errore invio notifica email");
-    return false;
+    return { ok: false, reason: "error", error: e };
   }
 }
 
@@ -67,12 +121,19 @@ async function inviaEmail(notifica: NotificaEmail): Promise<boolean> {
  */
 export function __resetTransporterCacheForTests(): void {
   cachedTransporter = null;
+  cachedKey = "";
 }
 
 /**
  * Notifica al referente territoriale competente che c'è una nuova
  * segnalazione in revisione. Cerca il referente assegnato alla provincia
  * o alla regione della segnalazione.
+ *
+ * Gli admin NON ricevono più una notifica per ogni nuova segnalazione in
+ * revisione: questa cascata generava email eccessive (ogni admin per ogni
+ * segnalazione) ed è stata rimossa in favore di un più mirato flusso di
+ * notifica ai referenti territorialmente competenti. Gli admin possono
+ * monitorare il sistema tramite la dashboard.
  */
 export async function notificaReferenteNuovaRevisione(
   segnalazioneId: string
@@ -91,6 +152,8 @@ export async function notificaReferenteNuovaRevisione(
   // Cerca referenti assegnati a questa provincia o regione.
   // Il filtro runtime `if (email)` nel ciclo sotto gestisce il caso
   // (rarissimo) di utente senza email disponibile.
+  // Gli admin non sono inclusi nella notifica: ricevono troppe email
+  // e possono monitorare via dashboard.
   const referenti = await db.user.findMany({
     where: {
       attivo: true,
@@ -106,7 +169,6 @@ export async function notificaReferenteNuovaRevisione(
             ...(segnalazione.regioneId !== null
               ? [{ ruolo: "referente_regionale" as const, regioneId: segnalazione.regioneId }]
               : []),
-            { ruolo: "admin" as const },
           ],
         },
       ],
@@ -132,11 +194,19 @@ Piattaforma: ${process.env.NEXT_PUBLIC_BASE_URL ?? "https://segnalazioni.esempio
 
 CieloBuio, Coordinamento per la protezione del cielo notturno`;
 
-  for (const ref of referenti) {
-    const email = ref.emailOrdinaria ?? ref.email;
-    if (email) {
-      await inviaEmail({ to: email, subject, text });
-    }
+  // Invia in parallelo: Promise.allSettled per non bloccare su un
+  // destinatario fallito. Logga i fallimenti ma non le propaga (le
+  // notifiche sono best-effort rispetto al flusso principale).
+  const destinatari = referenti
+    .map((ref) => ref.emailOrdinaria ?? ref.email)
+    .filter((email): email is string => Boolean(email));
+
+  const results = await Promise.allSettled(
+    destinatari.map((email) => inviaEmail({ to: email, subject, text }))
+  );
+  const failures = results.filter((r) => r.status === "rejected" || (r.status === "fulfilled" && !r.value.ok));
+  if (failures.length > 0) {
+    logger.warn({ total: destinatari.length, failures: failures.length }, "Alcune notifiche email non sono state consegnate");
   }
 }
 
@@ -169,13 +239,22 @@ Accedi alla piattaforma per modificare i dati e inviare nuovamente la segnalazio
 
 CieloBuio, Coordinamento per la protezione del cielo notturno`;
 
-  await inviaEmail({ to: email, subject, text });
+  const result = await inviaEmail({ to: email, subject, text });
+  if (result.ok === false && result.reason === "error") {
+    logger.warn(
+      { err: result.error, to: email, segnalazioneId },
+      "Invio notifica rifiuto al volontario fallito (best-effort, non blocca il flusso principale)"
+    );
+  }
 }
 
 /**
  * Notifica al volontario e al referente approvatore che la PEC è stata
  * inviata con successo. Entrambi ricevono la stessa email di conferma
  * (se diversi e con email disponibile).
+ *
+ * Gli invii sono in parallelo (Promise.allSettled) per ridurre la
+ * latenza totale rispetto all'invio sequenziale.
  */
 export async function notificaPecInviata(segnalazioneId: string): Promise<void> {
   const segnalazione = await db.segnalazione.findUnique({
@@ -201,18 +280,32 @@ La pratica è ora in stato "Inviata" e resta in attesa di risposta dall'amminist
 
 CieloBuio, Coordinamento per la protezione del cielo notturno`;
 
-  // Invia al volontario segnalatore
+  // Costruisce la lista dei destinatari (volontario + referente approvatore
+  // se diverso), deduplicando per email.
+  const destinatari = new Set<string>();
   const emailVolontario = segnalazione.volontario?.emailOrdinaria ?? segnalazione.volontario?.email;
-  if (emailVolontario) {
-    await inviaEmail({ to: emailVolontario, subject, text });
-  }
+  if (emailVolontario) destinatari.add(emailVolontario);
 
-  // Invia anche al referente approvatore (se diverso dal volontario e con email disponibile)
   const referente = segnalazione.referenteApprovatore;
   if (referente && referente.id !== segnalazione.volontario?.id) {
     const emailReferente = referente.emailOrdinaria ?? referente.email;
-    if (emailReferente && emailReferente !== emailVolontario) {
-      await inviaEmail({ to: emailReferente, subject, text });
-    }
+    if (emailReferente) destinatari.add(emailReferente);
+  }
+
+  // Invia in parallelo. Promise.allSettled per non bloccare su un
+  // destinatario fallito. Logga i fallimenti come warning per dare
+  // visibilità al problema senza propagare l'errore al chiamante
+  // (le notifiche sono best-effort rispetto al flusso principale).
+  const results = await Promise.allSettled(
+    [...destinatari].map((email) => inviaEmail({ to: email, subject, text }))
+  );
+  const failures = results.filter(
+    (r) => r.status === "rejected" || (r.status === "fulfilled" && !r.value.ok)
+  );
+  if (failures.length > 0) {
+    logger.warn(
+      { total: destinatari.size, failures: failures.length, segnalazioneId },
+      "Alcune notifiche di conferma invio PEC non sono state consegnate"
+    );
   }
 }

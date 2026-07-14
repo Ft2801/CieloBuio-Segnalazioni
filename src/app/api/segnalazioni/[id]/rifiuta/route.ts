@@ -59,41 +59,54 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   try {
-    // Update atomica con clausola WHERE su stato="in_revisione": previene
-    // race condition tra findUnique e update (lo stato potrebbe cambiare
-    // concorrentemente, ad es. un altro referente approva nello stesso
-    // istante). Se count=0, lo stato è cambiato: rispondiamo 409 Conflict.
-    const result = await db.segnalazione.updateMany({
-      where: { id, stato: "in_revisione" },
-      data: {
-        stato: "bozza",
-        referenteApprovatoreId: user.id,
-        notaRifiuto,
-      },
+    // Transazione interattiva: updateMany + storicoStato.create nello
+    // stesso blocco atomico. Se la create di storicoStato fallisce, anche
+    // l'updateMany viene rollbackato, preservando l'invariante "ogni
+    // transizione di stato ha il suo audit record".
+    const aggiornata = await db.$transaction(async (tx) => {
+      // Update atomica con clausola WHERE su stato="in_revisione": previene
+      // race condition tra findUnique e update (lo stato potrebbe cambiare
+      // concorrentemente, ad es. un altro referente approva nello stesso
+      // istante). Se count=0, lo stato è cambiato: rispondiamo 409 Conflict.
+      const result = await tx.segnalazione.updateMany({
+        where: { id, stato: "in_revisione" },
+        data: {
+          stato: "bozza",
+          referenteApprovatoreId: user.id,
+          notaRifiuto,
+        },
+      });
+      if (result.count === 0) {
+        return null;
+      }
+
+      const seg = await tx.segnalazione.findUnique({ where: { id } });
+
+      await tx.storicoStato.create({
+        data: {
+          segnalazioneId: id,
+          statoPrecedente: "in_revisione",
+          statoNuovo: "bozza",
+          userId: user.id,
+          nota: `Rifiutata dal referente: ${notaRifiuto}`,
+        },
+      });
+      return seg;
     });
-    if (result.count === 0) {
+    if (aggiornata === null) {
       return NextResponse.json(
         { error: "La segnalazione non è più in stato di revisione (potrebbe essere stata modificata concorrentemente). Ricarica la pagina." },
         { status: 409 }
       );
     }
 
-    const aggiornata = await db.segnalazione.findUnique({ where: { id } });
-
-    await db.storicoStato.create({
-      data: {
-        segnalazioneId: id,
-        statoPrecedente: "in_revisione",
-        statoNuovo: "bozza",
-        userId: user.id,
-        nota: `Rifiutata dal referente: ${notaRifiuto}`,
-      },
-    });
-
     // Notifica email al volontario (async, non bloccante)
     void notificaVolontarioRifiuto(id, notaRifiuto);
 
-    return NextResponse.json({ segnalazione: aggiornata });
+    return NextResponse.json(
+      { segnalazione: aggiornata },
+      { headers: { "Cache-Control": "private, no-store" } }
+    );
   } catch (e) {
     logger.error({ err: e }, "Errore rifiuto");
     return NextResponse.json(

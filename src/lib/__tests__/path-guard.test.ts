@@ -67,6 +67,10 @@ describe("isSafePathSegment", () => {
     expect(isSafePathSegment("a..b")).toBe(false);  // contains ..
   });
 
+  it("respinge . (riferimento implicito alla directory corrente)", () => {
+    expect(isSafePathSegment(".")).toBe(false);
+  });
+
   it("respinge / (separatore Unix)", () => {
     expect(isSafePathSegment("a/b")).toBe(false);
     expect(isSafePathSegment("/etc")).toBe(false);
@@ -136,7 +140,7 @@ describe("risolviPathAllegatoSicuro", () => {
     const result = risolviPathAllegatoSicuro("cabcdefghij1234567890", "file.jpg");
     expect(result).not.toBeNull();
     expect(result?.startsWith(UPLOADS_ROOT + path.sep)).toBe(true);
-    expect(result?.endsWith("cabcdefghij1234567890/file.jpg")).toBe(true);
+    expect(result?.endsWith(path.join("cabcdefghij1234567890", "file.jpg"))).toBe(true);
   });
 
   it("respinge segnalazioneId non sicuro (path traversal)", () => {

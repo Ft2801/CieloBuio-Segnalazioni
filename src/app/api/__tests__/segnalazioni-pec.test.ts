@@ -71,7 +71,7 @@ vi.mock("@/lib/db", () => ({
     },
     sessione: {
       findUnique: vi.fn(),
-      delete: vi.fn(),
+      delete: vi.fn().mockResolvedValue({}),
     },
   },
 }));
@@ -86,7 +86,7 @@ import { POST as SIMULA_PEC } from "@/app/api/segnalazioni/[id]/simula-pec/route
 import { readFile } from "fs/promises";
 
 const ADMIN_SESSION = {
-  id: "s1", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s1", token: "tok", scadenza: new Date(Date.now() + 365 * 86400 * 1000),
   user: {
     id: "u-admin", email: "admin@t.it", nomeCognome: "Admin", ruolo: "admin",
     provinciaId: null, regioneId: null, inizialiProtocollo: "AD",
@@ -94,7 +94,7 @@ const ADMIN_SESSION = {
   },
 };
 const VOL_SESSION = {
-  id: "s2", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s2", token: "tok", scadenza: new Date(Date.now() + 365 * 86400 * 1000),
   user: {
     id: "u-vol", email: "vol@t.it", nomeCognome: "Volontario", ruolo: "volontario",
     provinciaId: null, regioneId: null, inizialiProtocollo: "VL",
@@ -105,7 +105,7 @@ const VOL_SESSION = {
 // segnalazione di test, che è 1): serve per coprire il ramo di fallimento
 // di hasTerritorialCompetence (403 "Non autorizzato per questa segnalazione").
 const REF_PROV_OTHER_SESSION = {
-  id: "s3", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s3", token: "tok", scadenza: new Date(Date.now() + 365 * 86400 * 1000),
   user: {
     id: "u-ref-other", email: "ref-other@t.it", nomeCognome: "Ref Other",
     ruolo: "referente_provinciale",
@@ -116,7 +116,7 @@ const REF_PROV_OTHER_SESSION = {
 // Referente provinciale con provinciaId=1 (stessa della segnalazione di
 // test): ha competenza territoriale e può inviare/simulare PEC.
 const REF_PROV_SESSION = {
-  id: "s4", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s4", token: "tok", scadenza: new Date(Date.now() + 365 * 86400 * 1000),
   user: {
     id: "u-ref", email: "ref@t.it", nomeCognome: "Referente",
     ruolo: "referente_provinciale",

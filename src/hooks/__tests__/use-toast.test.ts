@@ -257,7 +257,7 @@ describe("useToast hook", () => {
     act(() => {
       result.current.dismiss(id);
     });
-    // Seconda dismiss sullo stesso id: early return (toastTimeouts.has gia' true)
+    // Seconda dismiss sullo stesso id: early return (toastTimeouts.has già true)
     act(() => {
       result.current.dismiss(id);
     });

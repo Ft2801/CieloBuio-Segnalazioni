@@ -161,7 +161,26 @@ export function AppShell() {
                 // Gestisce i parametri di navigazione: se params contiene
                 // "stato", lo passa come filtroStatoIniziale alla lista.
                 if (v === "lista" && params && typeof params.stato === "string") {
-                  setVista({ name: "lista", stato: params.stato as StatoSegnalazione });
+                  // Validazione difensiva: params.stato proviene dalla
+                  // navigazione interna (dashboard), ma verifichiamo
+                  // che sia un valore ammissibile di StatoSegnalazione
+                  // o la stringa "all" usata come meta-filtro. Previene
+                  // cast alla cieca di stringhe arbitrarie che potrebbero
+                  // causare comportamenti inattesi nella ListaSegnalazioni.
+                  const statiValdi: ReadonlyArray<string> = [
+                    "bozza",
+                    "in_revisione",
+                    "approvata",
+                    "inviata",
+                    "in_attesa",
+                    "chiusa_positiva",
+                    "chiusa_negativa",
+                    "all",
+                  ];
+                  const stato = statiValdi.includes(params.stato)
+                    ? (params.stato as StatoSegnalazione | "all")
+                    : "all";
+                  setVista({ name: "lista", stato });
                 } else {
                   setVista({ name: v as Vista["name"] } as Vista);
                 }

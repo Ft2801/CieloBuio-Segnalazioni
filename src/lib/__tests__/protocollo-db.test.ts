@@ -28,7 +28,7 @@ vi.mock("@/lib/db", () => ({
   db: {
     segnalazione: {
       count: vi.fn(),
-      update: vi.fn(),
+      updateMany: vi.fn(),
     },
     $transaction: vi.fn(async (fn: unknown) => {
       if (typeof fn === "function") return fn();
@@ -59,7 +59,7 @@ describe("calcolaProtocolloPrevisionale", () => {
     expect(result).toBe("20260115-LOM-BG-MR01");
   });
 
-  it("incrementa il progressivo se esistono gia' segnalazioni", async () => {
+  it("incrementa il progressivo se esistono già segnalazioni", async () => {
     vi.mocked(db.segnalazione.count).mockResolvedValue(2);
     const result = await calcolaProtocolloPrevisionale({
       data: new Date(2026, 0, 15),
@@ -92,7 +92,7 @@ describe("generaNumeroProtocollo", () => {
 
   it("genera e persiste il protocollo con successo", async () => {
     vi.mocked(db.$transaction).mockResolvedValue(0);
-    vi.mocked(db.segnalazione.update).mockResolvedValue({} as any);
+    vi.mocked(db.segnalazione.updateMany).mockResolvedValue({ count: 1 } as any);
     const result = await generaNumeroProtocollo({
       data: new Date(2026, 0, 15),
       regione: "LOMBARDIA",
@@ -103,15 +103,15 @@ describe("generaNumeroProtocollo", () => {
       segnalazioneId: "seg-1",
     });
     expect(result).toBe("20260115-LOM-BG-MR01");
-    expect(db.segnalazione.update).toHaveBeenCalled();
+    expect(db.segnalazione.updateMany).toHaveBeenCalled();
   });
 
   it("ritenta su collisione P2002 e ha successo", async () => {
     vi.mocked(db.$transaction).mockResolvedValue(0);
     const p2002Error = new (Prisma.PrismaClientKnownRequestError as unknown as new (msg: string, code: string) => Error)("Unique constraint", "P2002");
-    vi.mocked(db.segnalazione.update)
+    vi.mocked(db.segnalazione.updateMany)
       .mockRejectedValueOnce(p2002Error)
-      .mockResolvedValueOnce({} as any);
+      .mockResolvedValueOnce({ count: 1 } as any);
 
     const result = await generaNumeroProtocollo({
       data: new Date(2026, 0, 15),
@@ -122,13 +122,13 @@ describe("generaNumeroProtocollo", () => {
       segnalazioneId: "seg-1",
     });
     expect(result).toBe("20260115-LOM-BG-MR02");
-    expect(db.segnalazione.update).toHaveBeenCalledTimes(2);
+    expect(db.segnalazione.updateMany).toHaveBeenCalledTimes(2);
   });
 
   it("lancia errore dopo 10 tentativi falliti", async () => {
     vi.mocked(db.$transaction).mockResolvedValue(0);
     const p2002Error = new (Prisma.PrismaClientKnownRequestError as unknown as new (msg: string, code: string) => Error)("Unique constraint", "P2002");
-    vi.mocked(db.segnalazione.update).mockRejectedValue(p2002Error);
+    vi.mocked(db.segnalazione.updateMany).mockRejectedValue(p2002Error);
 
     await expect(generaNumeroProtocollo({
       data: new Date(2026, 0, 15),
@@ -142,7 +142,7 @@ describe("generaNumeroProtocollo", () => {
 
   it("propaga errori non P2002", async () => {
     vi.mocked(db.$transaction).mockResolvedValue(0);
-    vi.mocked(db.segnalazione.update).mockRejectedValue(new Error("Connection lost"));
+    vi.mocked(db.segnalazione.updateMany).mockRejectedValue(new Error("Connection lost"));
 
     await expect(generaNumeroProtocollo({
       data: new Date(2026, 0, 15),

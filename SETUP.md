@@ -25,8 +25,8 @@ non ha lavorato in precedenza su questo codice.
 11. [Aggiornamento dell'applicazione dopo il primo deploy](#11-aggiornamento-dellapplicazione-dopo-il-primo-deploy)
 12. [Pubblicazione su GitHub: cosa è sicuro e cosa no](#12-pubblicazione-su-github-cosa-è-sicuro-e-cosa-no)
 13. [Checklist finale prima di andare online](#13-checklist-finale-prima-di-andare-online)
-13.5. [Deploy alternativo: Docker Compose](#135-deploy-alternativo-docker-compose)
-14. [Risoluzione problemi comuni](#14-risoluzione-problemi-comuni)
+14. [Deploy alternativo: Docker Compose](#14-deploy-alternativo-docker-compose)
+15. [Risoluzione problemi comuni](#15-risoluzione-problemi-comuni)
 
 ---
 
@@ -34,7 +34,7 @@ non ha lavorato in precedenza su questo codice.
 
 | Livello | Tecnologia | Note |
 |---|---|---|
-| Runtime | **Node.js 20+** | Gestore pacchetti consigliato: **npm** |
+| Runtime | **Node.js 22+** | Gestore pacchetti consigliato: **npm** |
 | Framework web | **Next.js 16** (App Router) | Genera sia il frontend sia le API in un unico progetto |
 | Linguaggio | **TypeScript 5** | Tipizzato, gli errori di tipo bloccano il build (`ignoreBuildErrors: false`) |
 | UI | **React 19** + **Tailwind CSS 4** + **shadcn/ui** | Componenti accessibili, nessun servizio esterno a pagamento |
@@ -54,7 +54,7 @@ ISC): nessun costo di licenza, nessun lock-in verso un fornitore.
 
 Prima di iniziare, assicurati di avere:
 
-- **Node.js 20 o superiore** (verifica con `node --version`)
+- **Node.js 22 o superiore** (verifica con `node --version`)
 - **Git**
 - Un editor di testo o IDE (es. VS Code)
 - Per il deploy in produzione: un **VPS** (server privato virtuale) economico
@@ -138,7 +138,8 @@ Lo script chiede interattivamente, dal terminale:
 - email
 - nome e cognome
 - ruolo (premi invio per il default `admin`)
-- iniziali per il numero di protocollo
+- iniziali per il numero di protocollo (opzionale, premi invio per saltare:
+  verranno derivate automaticamente dal nome e cognome)
 - password (validata subito con le stesse regole dell'applicazione: almeno
   12 caratteri, con maiuscola, minuscola, numero e carattere speciale)
 
@@ -348,7 +349,7 @@ sudo apt update && sudo apt upgrade -y
 ### 8.2 Installa Node.js e Git
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt install -y nodejs git
 ```
 
@@ -406,7 +407,7 @@ TRANSIZIONE_INVIATA_GIORNI=7
 ### 8.6 Installa le dipendenze, genera Prisma e prepara il database
 
 ```bash
-npm install --production
+npm ci --omit=dev
 npm run db:generate
 npm run db:push
 npm run db:seed
@@ -414,9 +415,12 @@ npm run db:create-admin
 ```
 
 > Se in futuro modifichi lo schema del database dopo il primo deploy, usa
-> `npm run db:migrate` (equivalente a `prisma migrate deploy`, pensato per
-> ambienti non interattivi) invece di `db:push`, per applicare le modifiche
-> in modo tracciato con file di migrazione.
+> `npm run db:push` per sincronizzare le modifiche dello schema al database.
+> Il progetto non usa una directory `prisma/migrations/`: lo schema iniziale
+> è gestito da `db:push` e i dati di esempio da `npm run db:seed`. Per
+> cambiamenti schema che richiedono data migration strutturata, valutare
+> in futuro l'introduzione di `prisma/migrations/` con `prisma migrate dev`
+> in development e `prisma migrate deploy` in produzione.
 
 ### 8.7 Compila l'applicazione per la produzione
 
@@ -584,8 +588,8 @@ mkdir -p /opt/cielobuio-segnalazioni/logs
 - **Database PostgreSQL**: il job di backup
   configurato al punto 9 esporta tutte le tabelle in JSON dentro
   `backups/`, con pulizia automatica dei backup più vecchi di 30 giorni.
-  Per un backup "grezzo" aggiuntivo, puoi anche solo copiare il file
-  il database PostgreSQL con `pg_dump` periodicamente.
+  Per un backup "grezzo" aggiuntivo, puoi anche solo creare un dump del
+  database PostgreSQL con `pg_dump` periodicamente.
 - **Database PostgreSQL** (se scelto): usa `pg_dump` schedulato invece del
   backup JSON, oppure mantieni entrambi.
 - **Allegati**: lo script di backup copia automaticamente anche i file
@@ -610,9 +614,9 @@ Quando ci sono modifiche al codice da pubblicare:
 ```bash
 cd /opt/cielobuio-segnalazioni
 git pull
-npm install --production
+npm ci --omit=dev
 npm run db:generate
-npm run db:migrate    # solo se ci sono nuove migrazioni nello schema
+npm run db:push       # sincronizza eventuali modifiche dello schema
 npm run build
 sudo systemctl restart cielobuio-segnalazioni
 ```
@@ -687,19 +691,19 @@ compaia nell'elenco.
 
 ---
 
-## 13.5. Deploy alternativo: Docker Compose
+## 14. Deploy alternativo: Docker Compose
 
 Oltre al deploy bare-metal con systemd (sezione 8), il repository include
 `Dockerfile` e `docker-compose.yml` per un deploy containerizzato che
 include app + PostgreSQL + Caddy (reverse proxy) in un unico stack.
 
-### 13.5.1. Prerequisiti Docker
+### 14.1. Prerequisiti Docker
 
 - Docker 24+ e Docker Compose v2 installati sul server
 - Dominio DNS configurato per puntare al server
 - Porte 80 (HTTP) e 443 (HTTPS) aperte sul firewall
 
-### 13.5.2. Avvio con Docker Compose
+### 14.2. Avvio con Docker Compose
 
 ```bash
 # Clona il repository
@@ -724,7 +728,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-### 13.5.3. Setup del database in Docker
+### 14.3. Setup del database in Docker
 
 Il container Docker include `tsx` (runner TypeScript) che permette di
 eseguire gli script di setup senza richiedere `bun`:
@@ -736,11 +740,15 @@ docker compose exec app npm run db:seed
 # Crea il primo utente amministratore
 docker compose exec app npm run db:create-admin
 
-# Verifica che l'app risponda
-curl -k https://localhost/api/health
+# Verifica che l'app risponda (curl interno al container, evita problemi
+# di routing DNS del Caddyfile configurato per un dominio specifico)
+docker compose exec app curl -sf http://localhost:3000/api/health
+
+# In alternativa, dall'host con resolve DNS forzato:
+# curl -k --resolve segnalazioni.esempio.it:443:127.0.0.1 https://segnalazioni.esempio.it/api/health
 ```
 
-### 13.5.4. Backup e cron in Docker
+### 14.4. Backup e cron in Docker
 
 ```bash
 # Backup manuale (cifrato se BACKUP_ENCRYPTION_KEY è impostata)
@@ -751,19 +759,28 @@ docker compose exec app npm run db:backup
 # 0 3 * * * docker compose -f /path/to/docker-compose.yml exec app npm run cron:reminder
 ```
 
-### 13.5.5. Configurazione Caddy
+### 14.5. Configurazione Caddy
 
 Il file `Caddyfile` è già configurato per terminare HTTPS e fare reverse
-proxy verso il container `app` sulla porta 3000. Modifica il dominio nel
-`Caddyfile` prima di avviare lo stack:
+proxy. L'upstream è configurabile via variabile d'ambiente `UPSTREAM_HOST`:
+di default usa `localhost:3000` (deploy bare-metal), in Docker Compose
+viene automaticamente impostato a `app:3000` dal `docker-compose.yml`.
+
+Modifica il dominio nel Caddyfile sostituendo `segnalazioni.esempio.it`
+con il dominio reale dell'associazione:
 
 ```Caddyfile
 segnalazioni.esempio.it {
-  reverse_proxy app:3000
+  reverse_proxy {$UPSTREAM_HOST:localhost:3000}
+  # ... resto della configurazione (header di sicurezza, log, ecc.)
 }
 ```
 
-### 13.5.6. Differenze rispetto al deploy bare-metal
+In Docker Compose non è necessario editare il Caddyfile: la variabile
+`UPSTREAM_HOST=app:3000` è già impostata nel service `caddy` del
+`docker-compose.yml`.
+
+### 14.6. Differenze rispetto al deploy bare-metal
 
 - **HOSTNAME**: nel container Docker, l'app binda `0.0.0.0:3000` sulla
   rete Docker interna, ma la porta è mappata sull'host solo su
@@ -775,12 +792,19 @@ segnalazioni.esempio.it {
 - **Bun non richiesto**: il container usa `node:22-alpine` + `tsx` per
   eseguire gli script TypeScript. Non è necessario installare Bun
   nell'host o nel container.
-- **Persistenza**: i volumi Docker `app-storage` e `db-data` preservano
-  gli allegati e il database tra riavvii del container.
+- **NEXT_PUBLIC_BASE_URL**: passata come build arg (non solo env runtime)
+  perché le variabili `NEXT_PUBLIC_*` vengono inlineate nel bundle client
+  in fase di build. Senza build arg, il client avrebbe `undefined` anche
+  con la env var impostata nel runtime del container.
+- **Persistenza**: i volumi Docker `app-storage`, `backups` e `db-data`
+  preservano gli allegati, i backup e il database tra riavvii del container.
+- **Backup cifrati**: imposta `BACKUP_ENCRYPTION_KEY` (Base64 di 32 byte,
+  genera con `openssl rand -base64 32`) per cifrare i backup at-rest con
+  AES-256-GCM. Senza questa variabile, i backup sono in chiaro.
 
 ---
 
-## 14. Risoluzione problemi comuni
+## 15. Risoluzione problemi comuni
 
 **"L'installazione delle dipendenze fallisce per conflitti di versione"**
 Assicurati di avere una copia pulita del progetto (senza `node_modules` e

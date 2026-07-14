@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSessionUser, getVisibilityFilter } from "@/lib/auth";
-import { segnalazionePecSchema, validaPecCcAggiuntive, validate } from "@/lib/validation";
+import { segnalazionePecSchema, validaPecCcAggiuntive, validate, capSchema } from "@/lib/validation";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 
@@ -25,8 +25,15 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const stato = url.searchParams.get("stato");
   const search = url.searchParams.get("search");
-  const limit = Math.min(Math.max(Number(url.searchParams.get("limit") ?? 50), 1), 200);
-  const offset = Math.max(Number(url.searchParams.get("offset") ?? 0), 0);
+
+  // Validazione difensiva di limit/offset: Number("abc") = NaN, e
+  // Math.min/max con NaN propagano NaN a Prisma che genererebbe una
+  // PrismaClientValidationError (500 non gestito). Usiamo fallback
+  // espliciti quando il valore non è un numero finito.
+  const rawLimit = Number(url.searchParams.get("limit") ?? 50);
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
+  const rawOffset = Number(url.searchParams.get("offset") ?? 0);
+  const offset = Number.isFinite(rawOffset) ? Math.max(rawOffset, 0) : 0;
 
   // Validazione del parametro stato contro whitelist (evita di passare a
   // Prisma stringhe arbitrarie, anche se Prisma le ignora silenziosamente).
@@ -150,7 +157,10 @@ export async function POST(req: NextRequest) {
     let regioneId: number | null = null;
     // Il CAP viene validato dallo schema zod a 5 cifre esatte in fase di
     // creazione/modifica comune; qui ereditiamo quello del comune se non fornito.
-    let cap = typeof body.cap === "string" ? body.cap.trim() : "";
+    // Se fornito dal volontario, deve comunque passare la validazione
+    // capSchema (5 cifre) per coerenza con il comune e per evitare
+    // che vengano persistiti CAP malformati che poi rompono la lettera PEC.
+    let cap: string | null = null;
     let destinatarioNome = pecValidation.data.destinatarioNome ?? null;
 
     const comune = await db.comune.findUnique({
@@ -163,7 +173,18 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    cap = cap || comune.cap;
+    if (typeof body.cap === "string" && body.cap.trim() !== "") {
+      const capResult = capSchema.safeParse(body.cap.trim());
+      if (!capResult.success) {
+        return NextResponse.json(
+          { error: capResult.error.issues[0]?.message ?? "CAP non valido (5 cifre)" },
+          { status: 400 }
+        );
+      }
+      cap = capResult.data;
+    } else {
+      cap = comune.cap;
+    }
     provinciaId = comune.provinciaId;
     regioneId = comune.provincia.regioneId;
     if (!destinatarioNome && comune.nomeSindaco) {
@@ -245,7 +266,10 @@ export async function POST(req: NextRequest) {
         pecCcAggiuntive: pecCcAggiuntiveNormalized,
         oggettoPec: pecValidation.data.oggettoPec ?? null,
         testoIntroduttivoPec: pecValidation.data.testoIntroduttivoPec ?? null,
-        mittenteVisibile: body.mittenteVisibile !== false,
+        // mittenteVisibile: default true. Solo false booleano o stringa "false"
+        // disabilitano la visibilità del mittente nella lettera PEC. Valori
+        // undefined (campo omesso) o altri tipi mantengono il default true.
+        mittenteVisibile: !(body.mittenteVisibile === false || body.mittenteVisibile === "false"),
         segnalazionePrecedenteId,
         livelloRecidiva,
       },

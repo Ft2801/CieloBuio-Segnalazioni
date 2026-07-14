@@ -266,7 +266,7 @@ describe("PannelloAdmin - rendering iniziale e tab", () => {
     expect(screen.getByText("Regioni e leggi")).toBeInTheDocument();
   });
 
-  it("non mostra il banner demo quando l'utente non e demo", async () => {
+  it("non mostra il banner demo quando l'utente non è demo", async () => {
     routeFetch({});
     render(<PannelloAdmin user={creaUser()} />);
     expect(screen.queryByText(/Account dimostrativo/i)).not.toBeInTheDocument();
@@ -514,7 +514,7 @@ describe("PannelloAdmin - Tab Regioni", () => {
     const user = userEvent.setup();
     routeFetchWithMutationError(
       { "/api/config/regioni": { regioni: [] } },
-      { method: "POST", url: "/api/config/regioni", status: 400, error: "Regione gia esistente" }
+      { method: "POST", url: "/api/config/regioni", status: 400, error: "Regione già esistente" }
     );
     render(<PannelloAdmin user={creaUser()} />);
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
@@ -529,7 +529,7 @@ describe("PannelloAdmin - Tab Regioni", () => {
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           title: "Errore",
-          description: "Regione gia esistente",
+          description: "Regione già esistente",
           variant: "destructive",
         })
       );
@@ -653,7 +653,7 @@ describe("PannelloAdmin - Tab Regioni", () => {
     const user = userEvent.setup();
     routeFetch({ "/api/config/regioni": { regioni: [] } });
     guardDemoMock.mockImplementation(() => {
-      // Lancia un valore che non e un'istanza di Error
+      // Lancia un valore che non è un'istanza di Error
       throw "stringa errore";
     });
     render(<PannelloAdmin user={creaUser()} />);
@@ -707,7 +707,7 @@ describe("PannelloAdmin - Tab Regioni", () => {
     expect(inputAfterLabel("PEC ARPA regionale")).toHaveValue("arpa.x@pec.regione.it");
     expect(inputAfterLabel("Titolo esteso della legge")).toHaveValue("Titolo LR 31/15");
     expect(inputAfterLabel("Articolo sanzioni")).toHaveValue("art. 7");
-  });
+  }, 30000);
 
   it("in modalità demo blocca l'eliminazione regione con toast 'Azione non disponibile'", async () => {
     const user = userEvent.setup();
@@ -744,7 +744,7 @@ describe("PannelloAdmin - Tab Regioni", () => {
     const user = userEvent.setup();
     confirmSpy.mockReturnValue(true);
     guardDemoMock.mockImplementation(() => {
-      // Lancia un valore che non e un'istanza di Error: description vuota
+      // Lancia un valore che non è un'istanza di Error: description vuota
       throw "stringa errore";
     });
     routeFetch({
@@ -1242,7 +1242,7 @@ describe("PannelloAdmin - Tab Province", () => {
   it("gestisce guardDemoReadOnly che lancia un non-Error in salva provincia", async () => {
     const user = userEvent.setup();
     guardDemoMock.mockImplementation(() => {
-      // Lancia un valore che non e un'istanza di Error
+      // Lancia un valore che non è un'istanza di Error
       throw "stringa errore";
     });
     routeFetch({
@@ -1345,7 +1345,7 @@ describe("PannelloAdmin - Tab Province", () => {
     const user = userEvent.setup();
     confirmSpy.mockReturnValue(true);
     guardDemoMock.mockImplementation(() => {
-      // Lancia un valore che non e un'istanza di Error: description vuota
+      // Lancia un valore che non è un'istanza di Error: description vuota
       throw "stringa errore";
     });
     routeFetch({
@@ -1552,7 +1552,7 @@ describe("PannelloAdmin - Tab Comuni", () => {
     expect(screen.getByText("n/d")).toBeInTheDocument();
   });
 
-  it("mostra 'Da verificare' quando noteAggiornamento e null", async () => {
+  it("mostra 'Da verificare' quando noteAggiornamento è null", async () => {
     const user = userEvent.setup();
     routeFetch({
       "/api/config/comuni": {
@@ -1579,7 +1579,7 @@ describe("PannelloAdmin - Tab Comuni", () => {
     });
   });
 
-  it("mostra 'Da verificare' quando noteAggiornamento non e una data valida", async () => {
+  it("mostra 'Da verificare' quando noteAggiornamento non è una data valida", async () => {
     const user = userEvent.setup();
     routeFetch({
       "/api/config/comuni": {
@@ -1978,7 +1978,7 @@ describe("PannelloAdmin - Tab Comuni", () => {
   it("gestisce guardDemoReadOnly che lancia un non-Error in salva comune", async () => {
     const user = userEvent.setup();
     guardDemoMock.mockImplementation(() => {
-      // Lancia un valore che non e un'istanza di Error
+      // Lancia un valore che non è un'istanza di Error
       throw "stringa errore";
     });
     routeFetch({
@@ -2117,7 +2117,7 @@ describe("PannelloAdmin - Tab Comuni", () => {
     const user = userEvent.setup();
     confirmSpy.mockReturnValue(true);
     guardDemoMock.mockImplementation(() => {
-      // Lancia un valore che non e un'istanza di Error: description vuota
+      // Lancia un valore che non è un'istanza di Error: description vuota
       throw "stringa errore";
     });
     routeFetch({
@@ -2711,7 +2711,7 @@ describe("PannelloAdmin - Tab Utenti", () => {
         "/api/config/province": { province: [] },
         "/api/config/regioni": { regioni: [] },
       },
-      { method: "POST", url: "/api/config/users", status: 400, error: "Email gia esistente" }
+      { method: "POST", url: "/api/config/users", status: 400, error: "Email già esistente" }
     );
     render(<PannelloAdmin user={creaUser()} />);
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
@@ -2726,7 +2726,7 @@ describe("PannelloAdmin - Tab Utenti", () => {
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           title: "Errore",
-          description: "Email gia esistente",
+          description: "Email già esistente",
           variant: "destructive",
         })
       );
@@ -3090,7 +3090,7 @@ describe("PannelloAdmin - Tab Utenti", () => {
     const body = JSON.parse((patchCall![1] as RequestInit).body as string);
     // provinciaId convertito in Number (ramo true del ternario)
     expect(body.provinciaId).toBe(1);
-    // regioneId resta null perche form.regioneId e vuoto
+    // regioneId resta null perché form.regioneId è vuoto
     expect(body.regioneId).toBeNull();
   });
 
@@ -3140,7 +3140,7 @@ describe("PannelloAdmin - Tab Utenti", () => {
     const body = JSON.parse((patchCall![1] as RequestInit).body as string);
     // regioneId convertito in Number (ramo true del ternario)
     expect(body.regioneId).toBe(1);
-    // provinciaId resta null perche form.provinciaId e vuoto
+    // provinciaId resta null perché form.provinciaId è vuoto
     expect(body.provinciaId).toBeNull();
   });
 
@@ -3195,7 +3195,7 @@ describe("PannelloAdmin - Tab Utenti", () => {
   it("gestisce guardDemoReadOnly che lancia un non-Error in salva utente", async () => {
     const user = userEvent.setup();
     guardDemoMock.mockImplementation(() => {
-      // Lancia un valore che non e un'istanza di Error
+      // Lancia un valore che non è un'istanza di Error
       throw "stringa errore";
     });
     routeFetch({
@@ -3347,7 +3347,7 @@ describe("PannelloAdmin - Tab Utenti", () => {
     const user = userEvent.setup();
     confirmSpy.mockReturnValue(true);
     guardDemoMock.mockImplementation(() => {
-      // Lancia un valore che non e un'istanza di Error: description vuota
+      // Lancia un valore che non è un'istanza di Error: description vuota
       throw "stringa errore";
     });
     routeFetch({

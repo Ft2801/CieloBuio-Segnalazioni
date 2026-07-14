@@ -16,7 +16,7 @@ vi.mock("@/lib/db", () => ({
   db: {
     sessione: {
       findUnique: vi.fn(),
-      delete: vi.fn(),
+      delete: vi.fn().mockResolvedValue({}),
     },
     $transaction: vi.fn(),
   },

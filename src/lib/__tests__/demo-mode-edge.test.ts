@@ -107,7 +107,7 @@ describe("demo session - edge cases per coverage 100%", () => {
     expect(getActiveDemoSession()).toBeNull();
   });
 
-  it("getActiveDemoSession ritorna null se parsed non ha proprieta' isDemo (undefined)", () => {
+  it("getActiveDemoSession ritorna null se parsed non ha proprietà isDemo (undefined)", () => {
     const fakeStorage = {
       getItem: () => JSON.stringify({ id: "fake", ruolo: "volontario" }), // senza isDemo
       setItem: () => {},

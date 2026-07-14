@@ -145,15 +145,46 @@ export function getActiveDemoSession(): DemoSessionUser | null {
     const raw = sessionStorage.getItem(DEMO_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as unknown;
-    // Verifica che parsed sia un oggetto con isDemo === true. L'uso di
-    // type narrowing + strict equality riduce i rami e garantisce
-    // che solo oggetti con il marcatore isDemo vengano accettati.
+    // Validazione difensiva della shape: un valore manomesso in sessionStorage
+    // (es. dev tools, estensione browser) potrebbe avere isDemo=true ma
+    // campi mancanti o di tipo sbagliato, causando crash nei componenti
+    // downstream che leggono ruolo/provinciaId/ecc. Verifichiamo tutti i
+    // campi obbligatori prima di accettare la sessione.
     if (
       typeof parsed === "object" &&
       parsed !== null &&
       (parsed as Record<string, unknown>).isDemo === true
     ) {
-      return parsed as DemoSessionUser;
+      const obj = parsed as Record<string, unknown>;
+      const ruolo = obj.ruolo;
+      if (
+        typeof obj.id === "string" &&
+        typeof obj.email === "string" &&
+        typeof obj.nomeCognome === "string" &&
+        (ruolo === "volontario" || ruolo === "referente_provinciale" || ruolo === "admin") &&
+        (obj.provinciaId === null || typeof obj.provinciaId === "number") &&
+        (obj.regioneId === null || typeof obj.regioneId === "number") &&
+        (obj.inizialiProtocollo === null || typeof obj.inizialiProtocollo === "string") &&
+        (obj.pec === null || typeof obj.pec === "string") &&
+        (obj.emailOrdinaria === null || typeof obj.emailOrdinaria === "string") &&
+        (obj.indirizzo === null || typeof obj.indirizzo === "string") &&
+        (obj.firma === null || typeof obj.firma === "string")
+      ) {
+        return {
+          id: obj.id,
+          email: obj.email,
+          nomeCognome: obj.nomeCognome,
+          ruolo: ruolo,
+          provinciaId: obj.provinciaId as number | null,
+          regioneId: obj.regioneId as number | null,
+          inizialiProtocollo: obj.inizialiProtocollo as string | null,
+          pec: obj.pec as string | null,
+          emailOrdinaria: obj.emailOrdinaria as string | null,
+          indirizzo: obj.indirizzo as string | null,
+          firma: obj.firma as string | null,
+          isDemo: true,
+        };
+      }
     }
     return null;
   } catch {

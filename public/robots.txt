@@ -1,2 +1,15 @@
+# CieloBuio Segnalazioni - robots.txt
+#
+# L'applicazione è di sola lettura per il pubblico: non ha pagine
+# pubbliche indicizzabili (tutte le route richiedono autenticazione).
+# La disabilitazione totale dell'indicizzazione è intenzionale per:
+# - evitare che i contenuti delle segnalazioni (PII, indirizzi) vengano
+#   memorizzati nei motori di ricerca
+# - evitare indexing di pagine di login/error che non hanno valore SEO
+# - rispettare il principio di minimizzazione esposto in PRIVACY.md
+#
+# Le uniche risorse pubbliche (manifest.json, logo.svg, icone) non hanno
+# valore SEO e non necessitano di indicizzazione.
+
 User-agent: *
 Disallow: /

@@ -30,6 +30,7 @@ vi.mock("@/lib/auth", () => ({
   // Necessario per la route /api/docs che legge dinamicamente il nome
   // del cookie di sessione in base a NODE_ENV
   getSessionCookieName: () => process.env.NODE_ENV === "production" ? "__Host-cb_session" : "cb_session",
+  timingSafeEqualStrings: (a: string, b: string) => a === b,
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -64,7 +65,7 @@ describe("[Health Check] GET /api/health", () => {
   });
 
   it("ritorna 200 con status ok quando il database è connesso", async () => {
-    vi.mocked(db.user.count).mockResolvedValue(1);
+    vi.mocked(db.$queryRaw).mockResolvedValue([1] as any);
     const res = await HealthGET();
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -79,7 +80,7 @@ describe("[Health Check] GET /api/health", () => {
   });
 
   it("ritorna 503 con status error quando il database non è raggiungibile", async () => {
-    vi.mocked(db.user.count).mockRejectedValue(new Error("Connection refused"));
+    vi.mocked(db.$queryRaw).mockRejectedValue(new Error("Connection refused"));
     const res = await HealthGET();
     expect(res.status).toBe(503);
     const json = await res.json();
@@ -89,7 +90,7 @@ describe("[Health Check] GET /api/health", () => {
   });
 
   it("ritorna 503 anche con errore non-Error (stringa)", async () => {
-    vi.mocked(db.user.count).mockRejectedValue("DB timeout string" as any);
+    vi.mocked(db.$queryRaw).mockRejectedValue("DB timeout string" as any);
     const res = await HealthGET();
     expect(res.status).toBe(503);
     const json = await res.json();
@@ -230,13 +231,13 @@ describe("[Metrics] GET /api/metrics", () => {
     vi.unstubAllEnvs();
   });
 
-  it("ritorna 200 con token via query param (?token=)", async () => {
+  it("ritorna 403 con token via query param (?token=)", async () => {
     // Verifica il ramo in cui l'header Authorization manca o non è Bearer,
-    // e il token viene fornito via query string (uso comune in alcuni setup).
+    // e il token viene fornito via query string: l'endpoint lo rifiuta per sicurezza.
     vi.stubEnv("METRICS_TOKEN", "valid-token-xyz");
     const req = new NextRequest("http://localhost/api/metrics?token=valid-token-xyz");
     const res = await MetricsGET(req);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
     vi.unstubAllEnvs();
   });
 

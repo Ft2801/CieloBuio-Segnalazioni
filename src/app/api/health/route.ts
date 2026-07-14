@@ -14,7 +14,12 @@ export async function GET() {
   let dbConnected = false;
 
   try {
-    await db.user.count();
+    // SELECT 1 instead of count(): più leggera e non dipende dalla
+    // presenza di tabelle popolate. count() su tabella user esegue una
+    // scansione completa (o index scan) ad ogni health check, mentre
+    // SELECT 1 verifica solo la connettività. Prisma.raw è parameterizzato
+    // e non espone a SQL injection (nessuna interpolazione di input utente).
+    await db.$queryRaw`SELECT 1`;
     dbConnected = true;
   } catch {
     dbConnected = false;

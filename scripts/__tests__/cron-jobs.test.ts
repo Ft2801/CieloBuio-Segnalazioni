@@ -22,6 +22,27 @@ const mockDb = {
   storicoStato: {
     create: vi.fn(),
   },
+  // $transaction supporta due forme in Prisma:
+  //  - array di PrismaPromise: ritorna Promise<result[]>
+  //  - callback interattiva (tx) => Promise<T>: ritorna Promise<T>
+  // Il mock gestisce entrambe: se l'argomento è una funzione, la esegue
+  // passandogli mockDb come "tx"; se è un array, esegue tutte le promise
+  // in parallelo e ritorna i risultati.
+  $transaction: vi.fn(async (arg: unknown) => {
+    if (typeof arg === "function") {
+      return (arg as (tx: typeof mockDb) => Promise<unknown>)(mockDb);
+    }
+    if (Array.isArray(arg)) {
+      return Promise.all(arg);
+    }
+    return undefined;
+  }),
+  // $queryRaw: cron-jobs.ts acquisisce un advisory lock PostgreSQL via
+  // $queryRaw. Mockiamo ritornando [{ acquired: true }] così il lock viene
+  // sempre considerato acquisito e runCronJobs viene eseguita.
+  $queryRaw: vi.fn().mockResolvedValue([{ acquired: true }]),
+  // $executeRaw: cron-jobs.ts rilascia il lock via $executeRaw. Mock no-op.
+  $executeRaw: vi.fn().mockResolvedValue(1),
   $disconnect: vi.fn(),
 };
 
@@ -66,14 +87,16 @@ vi.mock("@/lib/logger", () => ({
   },
 }));
 
-// Mock console.log e console.error per verificare output
-const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+// Mock console.log e console.error per silenziare output non rilevante
+vi.spyOn(console, "log").mockImplementation(() => {});
+vi.spyOn(console, "error").mockImplementation(() => {});
 
 // Mock process.exit per prevenire chiusura del processo di test
 const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
   // Non fare nulla: previene la chiusura del processo di test
 }) as any);
+
+import { logger } from "../../src/lib/logger";
 
 describe("cron-jobs.ts", () => {
   beforeEach(() => {
@@ -105,7 +128,8 @@ describe("cron-jobs.ts", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(mockDb.sessione.deleteMany).toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledWith(
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({}),
       expect.stringContaining("Inizio cron jobs")
     );
   });
@@ -174,9 +198,9 @@ describe("cron-jobs.ts", () => {
       // Expected: process.exit throws
     }
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      "Errore cron jobs:",
-      expect.any(Error)
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({}),
+      "Errore cron jobs"
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
@@ -217,7 +241,8 @@ describe("cron-jobs.ts", () => {
     await import("../../scripts/cron-jobs");
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    expect(logSpy).toHaveBeenCalledWith(
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({}),
       expect.stringContaining("File orfani rimossi")
     );
   });

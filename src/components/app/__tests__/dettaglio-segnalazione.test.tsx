@@ -366,7 +366,7 @@ describe("DettaglioSegnalazione - modalita demo", () => {
 // Rendering header, badge stato, recidiva
 // -----------------------------------------------------------------------------
 
-describe("DettaglioSegnalazione - header e stato", () => {
+describe("DettaglioSegnalazione - header è stato", () => {
   it("mostra il numeroProtocollo come titolo quando presente", async () => {
     mockCaricamentoIniziale(creaSegnalazione({
       id: "s1",
@@ -468,7 +468,7 @@ describe("DettaglioSegnalazione - azioni volontario su bozza", () => {
     expect(screen.getByRole("button", { name: /Elimina bozza/i })).toBeInTheDocument();
   });
 
-  it("non mostra Modifica se l'utente non e il proprietario", async () => {
+  it("non mostra Modifica se l'utente non è il proprietario", async () => {
     mockCaricamentoIniziale(creaSegnalazione({
       id: "s1",
       stato: "bozza",
@@ -495,7 +495,7 @@ describe("DettaglioSegnalazione - azioni volontario su bozza", () => {
     const user = userEvent.setup();
     const onAggiornata = vi.fn();
     setupBozzaOwner();
-    // Risposte fetch in sequenza: 1) caricamento iniziale (gia configurato),
+    // Risposte fetch in sequenza: 1) caricamento iniziale (già configurato),
     // 2) POST cambia-stato, 3) ricarica segnalazione dopo azione.
     mockFetch
       .mockResolvedValueOnce(okResponse({ ok: true })) // POST cambia-stato
@@ -749,7 +749,7 @@ describe("DettaglioSegnalazione - azioni referente su in_revisione", () => {
     await user.click(screen.getByRole("button", { name: /Rifiuta con nota/i }));
     const annulla = await screen.findByRole("button", { name: /Annulla/i });
     await user.click(annulla);
-    // Dialog chiuso: il placeholder non e piu visibile
+    // Dialog chiuso: il placeholder non è più visibile
     await waitFor(() => {
       expect(screen.queryByPlaceholderText(/Mancano le foto/i)).not.toBeInTheDocument();
     });
@@ -1015,7 +1015,7 @@ describe("DettaglioSegnalazione - cambio stato manuale", () => {
     expect(await screen.findByText("Cambia stato della segnalazione")).toBeInTheDocument();
     // Il trigger del Select mostra il primo stato lecito: "Chiusa positiva".
     // Radix Select puo renderizzare anche gli item nel DOM (nascosti):
-    // si usa getAllByText per tollerare piu match.
+    // si usa getAllByText per tollerare più match.
     expect(screen.getAllByText("Chiusa positiva").length).toBeGreaterThan(0);
   });
 
@@ -2076,7 +2076,7 @@ describe("DettaglioSegnalazione - demo mode blocca azioni mutative", () => {
 // -----------------------------------------------------------------------------
 
 describe("DettaglioSegnalazione - azioneInCorso disabilita i pulsanti", () => {
-  it("durante invia in revisione i pulsanti azione restano disabilitati finche la fetch non completa", async () => {
+  it("durante invia in revisione i pulsanti azione restano disabilitati finché la fetch non completa", async () => {
     const user = userEvent.setup();
     mockCaricamentoIniziale(creaSegnalazione({
       id: "s1",

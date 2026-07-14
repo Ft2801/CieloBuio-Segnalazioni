@@ -103,7 +103,22 @@ export async function POST(_req: NextRequest, { params }: Params) {
   let messaggioErrore: string | null = null;
   let emailInviata = false;
 
-  if (pecHost && mittentePec) {
+  // Logica di branching esplicita sui due prerequisiti per l'invio SMTP
+  // reale della simulazione: host SMTP configurato E mittente PEC disponibile.
+  // Tre rami distinti per evitare l'attuale comportamento ambiguo in cui
+  // `!pecHost || !mittentePec` cade nel ramo demo ma il log viene comunque
+  // registrato con esito="ok" e un messaggio che menziona "modalità demo"
+  // anche quando l'host SMTP è configurato ma manca la PEC mittente.
+  if (!pecHost) {
+    // Modalità demo: nessun host SMTP configurato, simula con ritardo.
+    await new Promise((r) => setTimeout(r, 300));
+  } else if (!mittentePec) {
+    // Host SMTP configurato ma mittente PEC mancante: non possiamo inviare
+    // la simulazione. Registriamo esito="errore" con un messaggio chiaro
+    // per distinguere questo caso dal demo mode.
+    esito = "errore";
+    messaggioErrore = "Mittente PEC non configurato per l'utente corrente";
+  } else {
     try {
       // La simulazione invia la lettera completa (come l'invio reale).
       // generaTestoLettera include già il testo introduttivo del volontario.
@@ -135,9 +150,6 @@ export async function POST(_req: NextRequest, { params }: Params) {
       esito = "errore";
       messaggioErrore = e instanceof Error ? e.message : String(e);
     }
-  } else {
-    // Modalità demo: simula con un piccolo ritardo
-    await new Promise((r) => setTimeout(r, 300));
   }
 
   await db.logInvioPec.create({

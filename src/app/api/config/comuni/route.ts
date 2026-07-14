@@ -32,7 +32,12 @@ export async function GET(req: NextRequest) {
     where.provinciaId = provinciaIdNum;
   }
   if (search) {
-    where.nome = { contains: search, mode: "insensitive" as const };
+    // Limite difensivo sulla lunghezza del termine di ricerca: previene
+    // abusi (stringhe enormi che sforzano il planner di query PostgreSQL)
+    // senza impattare i casi d'uso reali (un nome comune raramente supera
+    // i 50 caratteri, 200 è un margine ampio).
+    const searchTrimmed = search.slice(0, 200);
+    where.nome = { contains: searchTrimmed, mode: "insensitive" as const };
   }
 
   const limit = search ? 50 : 500;

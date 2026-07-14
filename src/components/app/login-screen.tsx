@@ -29,20 +29,17 @@ import { Info } from "lucide-react";
  *
  * Motivo: useSession usa useState locale, non un Context condiviso. Due
  * chiamate a useSession() in due componenti diversi creano due istanze di
- * stato indipendenti: un login riuscito (soprattutto il login demo, che
- * aggiorna lo stato senza mai passare da una risposta di rete/redirect)
- * aggiornava lo stato interno di QUESTO componente, mentre AppShell -
- * che decide se mostrare LoginScreen o la dashboard in base al suo
- * proprio "user" - non veniva mai notificato. Da qui il sintomo: il
- * pulsante "Accedi" sembrava non fare nulla con le credenziali demo
- * corrette (il match avveniva, ma la UI non se ne accorgeva), mentre le
- * credenziali sbagliate mostravano regolarmente l'errore (letto e
- * scritto nello stesso componente).
+ * stato indipendenti. Passando onLogin come prop, AppShell rimane
+ * l'unica fonte di verità dello stato di sessione e decide in modo
+ * coerente se mostrare LoginScreen o la dashboard in base al proprio
+ * "user". Il login demo (che aggiorna lo stato localmente senza passare
+ * da una risposta di rete/redirect) viene così riflesso correttamente
+ * nella UI di AppShell.
  */
 export function LoginScreen({
   onLogin,
 }: {
-  onLogin: (email: string, password: string, totpToken?: string) => Promise<{ ok?: boolean; user?: unknown; requiresTotp?: boolean; error?: string } | unknown>;
+  onLogin: (email: string, password: string, totpToken?: string) => Promise<{ ok?: boolean; user?: unknown; requiresTotp?: boolean; error?: string }>;
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

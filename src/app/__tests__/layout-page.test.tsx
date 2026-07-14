@@ -109,7 +109,7 @@ describe("metadata export", () => {
 
 describe("viewport export", () => {
   it("ha themeColor", () => {
-    expect(viewport.themeColor).toBe("#f4f4f5");
+    expect(viewport.themeColor).toBe("#2a2d5f");
   });
 
   it("ha width device-width", () => {

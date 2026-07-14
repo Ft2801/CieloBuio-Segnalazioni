@@ -86,7 +86,8 @@ Desktop.ini
 *.lcov
 
 # Prisma
-/prisma/migrations/dev.db*
+# (in futuro, se si aggiungeranno migrations SQLite per test locali,
+# aggiungere qui il pattern /prisma/migrations/dev.db*)
 
 # File di progetto locali
 .tool-versions

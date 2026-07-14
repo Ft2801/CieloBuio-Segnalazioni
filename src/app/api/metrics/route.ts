@@ -7,9 +7,13 @@
  *
  *  1. **Token statico** (raccomandato per Prometheus): se la variabile
  *     d'ambiente `METRICS_TOKEN` è impostata, l'endpoint accetta
- *     richieste con header `Authorization: Bearer <token>` o query
- *     param `?token=<token>`. Questo è il modo raccomandato per
- *     Prometheus, che non supporta l'autenticazione via cookie HTTP-only.
+ *     richieste con header `Authorization: Bearer <token>`.
+ *     L'autenticazione via query param `?token=` è stata rimossa
+ *     perché i parametri URL vengono registrati nei log dei reverse
+ *     proxy (Caddy, nginx) e nella cronologia del browser, esponendo
+ *     il token a chi ha accesso ai log. Se serve una modalità
+ *     machine-to-machine senza header, configurare il reverse proxy
+ *     per iniettare l'header Authorization dal proprio segreto.
  *
  *  2. **Cookie di sessione admin** (per ispezione manuale da browser):
  *     se `METRICS_TOKEN` NON è impostata, l'endpoint richiede il
@@ -32,32 +36,25 @@
  * Autore: Fabio Tempera (2026)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUser, canManageConfiguration } from "@/lib/auth";
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
-}
+import { getSessionUser, canManageConfiguration, timingSafeEqualStrings } from "@/lib/auth";
 
 export async function GET(req: NextRequest) {
   // Autenticazione: due modalità mutuamente esclusive.
   const metricsToken = process.env.METRICS_TOKEN;
 
   if (metricsToken) {
-    // Modalità 1: token statico (per Prometheus).
-    // Accetta sia header Authorization: Bearer <token> sia query ?token=<token>.
+    // Modalità 1: token statico (per Prometheus) via Bearer header.
+    // NON accettiamo ?token= nell'URL: i parametri URL vengono loggati
+    // dai reverse proxy e restano nella cronologia del browser, quindi
+    // espongono il token a chiunque legga i log.
     const authHeader = req.headers.get("authorization") ?? "";
     const bearerToken = authHeader.startsWith("Bearer ")
       ? authHeader.slice(7).trim()
       : "";
-    const queryToken = req.nextUrl.searchParams.get("token") ?? "";
-    const providedToken = bearerToken || queryToken;
 
-    if (!providedToken || !timingSafeEqual(providedToken, metricsToken)) {
+    // Usa l'helper centralizzato timingSafeEqualStrings da auth.ts:
+    // implementazione più robusta (hash-based, no leak su lunghezza).
+    if (!bearerToken || !timingSafeEqualStrings(bearerToken, metricsToken)) {
       return NextResponse.json(
         { error: "Non autorizzato" },
         { status: 403 }

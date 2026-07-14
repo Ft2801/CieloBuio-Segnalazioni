@@ -264,12 +264,11 @@ describe("middleware - isOriginAllowed (unit test della funzione pura)", () => {
     expect(isOriginAllowed("custom-expected-value", expectedNonUrl, true)).toBe(true);
   });
 
-  it("ritorna true in sviluppo per URL malformato che contiene un dev host", async () => {
+  it("ritorna true in sviluppo per URL malformato che corrisponde a un dev host", async () => {
     const { isOriginAllowed } = await import("@/middleware");
-    // Stringa non parsabile come URL ma contenente "localhost:3000"
-    // "://localhost:3000" non ha scheme e throw, fallback a match stringa
-    expect(isOriginAllowed("://localhost:3000", "https://example.com", false)).toBe(true);
-    expect(isOriginAllowed("://127.0.0.1:3000", "https://example.com", false)).toBe(true);
+    // Stringa non parsabile come URL ma corrispondente a un dev host
+    expect(isOriginAllowed("localhost:3000", "https://example.com", false)).toBe(true);
+    expect(isOriginAllowed("127.0.0.1:3000", "https://example.com", false)).toBe(true);
   });
 
   it("ritorna false in produzione per URL malformato senza dev hosts", async () => {
@@ -309,18 +308,18 @@ describe("middleware - 127.0.0.1 accettato in sviluppo", () => {
     expect(res.status).toBe(403);
   });
 
-  it("in sviluppo accetta POST con Origin malformata che contiene dev host (fallback stringa)", async () => {
+  it("in sviluppo blocca POST con Origin malformata che contiene dev host come substring (fallback stringa)", async () => {
     vi.stubEnv("NODE_ENV", "development");
     process.env.NEXT_PUBLIC_BASE_URL = "https://example.com";
     vi.resetModules();
     const { middleware } = await import("@/middleware");
-    // "://localhost:3000" throw in new URL, ma catch block matcha dev host
+    // "://localhost:3000" non corrisponde esattamente, quindi deve essere bloccata
     const res = await middleware(
       makeReq("http://localhost:3000/api/test", {
         method: "POST",
         headers: { origin: "://localhost:3000" },
       })
     );
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
   });
 });

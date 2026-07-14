@@ -57,8 +57,16 @@ export function ListaSegnalazioni({
   }, [search]);
 
   const LIMIT = 50;
+  // Token di "latest request" per gestire la concorrenza delle fetch:
+  // quando l'utente cambia filtro rapidamente, una fetch precedente
+  // potrebbe completarsi dopo quella più recente e sovrascrivere i
+  // risultati aggiornati con risultati non più pertinenti. Incrementiamo
+  // il token prima di ogni fetch e scartiamo i risultati se il token non
+  // corrisponde più a quello atteso.
+  const reqIdRef = useRef(0);
 
   const carica = useCallback(async () => {
+    const myReqId = ++reqIdRef.current;
     setCaricamento(true);
     if (isDemoSession(user)) {
       // Modalità demo: filtra i dati statici incorporati nel bundle,
@@ -74,23 +82,45 @@ export function ListaSegnalazioni({
             (s.comune?.nome ?? "").toLowerCase().includes(q)
         );
       }
+      // In demo non ci sono race reali, ma rispettiamo comunque il token.
+      if (myReqId !== reqIdRef.current) return;
       setSegnalazioni(risultati);
       setHasMore(false);
       setTotal(risultati.length);
       setCaricamento(false);
       return;
     }
-    const params = new URLSearchParams();
-    if (stato !== "all") params.set("stato", stato);
-    if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
-    params.set("limit", String(LIMIT));
-    params.set("offset", "0");
-    const res = await fetch(`/api/segnalazioni?${params}`);
-    const data = await res.json().catch(() => ({}));
-    setSegnalazioni(data.segnalazioni ?? []);
-    setHasMore(data.pagination?.hasMore ?? false);
-    setTotal(data.pagination?.total ?? 0);
-    setCaricamento(false);
+    try {
+      const params = new URLSearchParams();
+      if (stato !== "all") params.set("stato", stato);
+      if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
+      params.set("limit", String(LIMIT));
+      params.set("offset", "0");
+      const res = await fetch(`/api/segnalazioni?${params}`);
+      // Scarta i risultati se nel frattempo è partita una fetch più recente.
+      if (myReqId !== reqIdRef.current) return;
+      if (!res.ok) {
+        setSegnalazioni([]);
+        setHasMore(false);
+        setTotal(0);
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (myReqId !== reqIdRef.current) return;
+      setSegnalazioni(data.segnalazioni ?? []);
+      setHasMore(data.pagination?.hasMore ?? false);
+      setTotal(data.pagination?.total ?? 0);
+    } catch {
+      if (myReqId !== reqIdRef.current) return;
+      setSegnalazioni([]);
+      setHasMore(false);
+      setTotal(0);
+    } finally {
+      // Solo l'ultima fetch deve sbloccare il caricamento.
+      if (myReqId === reqIdRef.current) {
+        setCaricamento(false);
+      }
+    }
   }, [stato, debouncedSearch, user]);
 
   useEffect(() => {
@@ -99,16 +129,31 @@ export function ListaSegnalazioni({
 
   async function caricaAltre() {
     setCaricamentoAltro(true);
-    const params = new URLSearchParams();
-    if (stato !== "all") params.set("stato", stato);
-    if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
-    params.set("limit", String(LIMIT));
-    params.set("offset", String(segnalazioni.length));
-    const res = await fetch(`/api/segnalazioni?${params}`);
-    const data = await res.json().catch(() => ({}));
-    setSegnalazioni((prev) => [...prev, ...(data.segnalazioni ?? [])]);
-    setHasMore(data.pagination?.hasMore ?? false);
-    setCaricamentoAltro(false);
+    const myReqId = ++reqIdRef.current;
+    try {
+      const params = new URLSearchParams();
+      if (stato !== "all") params.set("stato", stato);
+      if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
+      params.set("limit", String(LIMIT));
+      params.set("offset", String(segnalazioni.length));
+      const res = await fetch(`/api/segnalazioni?${params}`);
+      if (myReqId !== reqIdRef.current) return;
+      if (!res.ok) {
+        setHasMore(false);
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (myReqId !== reqIdRef.current) return;
+      setSegnalazioni((prev) => [...prev, ...(data.segnalazioni ?? [])]);
+      setHasMore(data.pagination?.hasMore ?? false);
+    } catch {
+      if (myReqId !== reqIdRef.current) return;
+      setHasMore(false);
+    } finally {
+      if (myReqId === reqIdRef.current) {
+        setCaricamentoAltro(false);
+      }
+    }
   }
 
   return (
@@ -176,8 +221,17 @@ export function ListaSegnalazioni({
           {segnalazioni.map((s) => (
             <Card
               key={s.id}
-              className="cursor-pointer hover:border-primary/40 hover:bg-accent/20 transition-colors"
+              className="cursor-pointer hover:border-primary/40 hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={() => onApriDettaglio(s.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onApriDettaglio(s.id);
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              aria-label={`Apri dettaglio segnalazione ${s.numeroProtocollo ?? s.id}`}
             >
               <CardContent className="py-4">
                 <div className="flex items-start justify-between gap-4">

@@ -19,26 +19,60 @@ import { logger } from "@/lib/logger";
 
 type Params = { params: Promise<{ id: string }> };
 
-const patchUserSchema = z.object({
-  email: emailSchema.optional(),
-  nomeCognome: z.string().min(1, "Nome e cognome obbligatori").max(200).regex(/^[^\r\n]*$/, "Il nome non può contenere a capo").optional(),
-  ruolo: ruoloSchema.optional(),
-  provinciaId: z.number().int().positive().optional().nullable(),
-  regioneId: z.number().int().positive().optional().nullable(),
-  pec: z.string().email("PEC non valida").optional().nullable().or(z.literal("")),
-  emailOrdinaria: z.string().email("Email ordinaria non valida").optional().nullable().or(z.literal("")),
-  indirizzo: z.string().max(500).optional().nullable(),
-  firma: z.string().max(2000).optional().nullable(),
-  inizialiProtocollo: z
-    .string()
-    .min(2, "Iniziali protocollo devono avere 2 caratteri")
-    .max(2, "Iniziali protocollo devono avere 2 caratteri")
-    .regex(/^[A-Za-z]+$/, "Solo lettere ammesse")
-    .optional()
-    .nullable(),
-  attivo: z.boolean().optional(),
-  newPassword: strongPasswordSchema.optional(),
-});
+const patchUserSchema = z
+  .object({
+    email: emailSchema.optional(),
+    nomeCognome: z.string().min(1, "Nome e cognome obbligatori").max(200).regex(/^[^\r\n]*$/, "Il nome non può contenere a capo").optional(),
+    ruolo: ruoloSchema.optional(),
+    provinciaId: z.number().int().positive().optional().nullable(),
+    regioneId: z.number().int().positive().optional().nullable(),
+    pec: z.string().email("PEC non valida").optional().nullable().or(z.literal("")),
+    emailOrdinaria: z.string().email("Email ordinaria non valida").optional().nullable().or(z.literal("")),
+    indirizzo: z.string().max(500).optional().nullable(),
+    firma: z.string().max(2000).optional().nullable(),
+    inizialiProtocollo: z
+      .string()
+      .min(2, "Iniziali protocollo devono avere 2 caratteri")
+      .max(2, "Iniziali protocollo devono avere 2 caratteri")
+      .regex(/^[A-Za-z]+$/, "Solo lettere ammesse")
+      .optional()
+      .nullable(),
+    attivo: z.boolean().optional(),
+    newPassword: strongPasswordSchema.optional(),
+  })
+  // Validazione incrociata ruolo/territorio, allineata a quella di
+  // nuovoUtenteSchema in validation.ts. Senza questo check, l'admin
+  // potrebbe assegnare provinciaId/regioneId a un volontario o admin,
+  // o lasciare un referente senza territorio: configurazioni incoerenti
+  // che produrrebbero comportamenti fuorvianti nelle query di visibilità.
+  .superRefine((data, ctx) => {
+    if (data.ruolo !== undefined) {
+      if (data.ruolo === "referente_provinciale" && data.provinciaId == null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Il ruolo referente_provinciale richiede provinciaId assegnato",
+          path: ["provinciaId"],
+        });
+      }
+      if (data.ruolo === "referente_regionale" && data.regioneId == null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Il ruolo referente_regionale richiede regioneId assegnato",
+          path: ["regioneId"],
+        });
+      }
+      if (
+        (data.ruolo === "volontario" || data.ruolo === "admin") &&
+        (data.provinciaId != null || data.regioneId != null)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "I ruoli volontario e admin non devono avere territorio assegnato",
+          path: ["ruolo"],
+        });
+      }
+    }
+  });
 
 export async function PATCH(req: NextRequest, { params }: Params) {
   const user = await getSessionUser();
@@ -181,8 +215,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       data.provinciaId !== undefined ||
       data.regioneId !== undefined;
     if (sessionInvalidationTriggers) {
-      await db.sessione.deleteMany({ where: { userId: id } }).catch(() => {
-        // Best-effort: non bloccare la PATCH se la invalidazione fallisce
+      await db.sessione.deleteMany({ where: { userId: id } }).catch((e: unknown) => {
+        // Best-effort: non bloccare la PATCH se la invalidazione fallisce,
+        // ma logga per dare visibilità al problema (l'utente modificato
+        // potrebbe mantenere accesso con i vecchi privilegi fino alla
+        // scadenza naturale della sessione).
+        logger.warn(
+          { err: e, userId: id },
+          "Errore non bloccante durante invalidazione sessioni utente dopo modifica"
+        );
       });
     }
 

@@ -5,8 +5,10 @@
 
 import { db } from "@/lib/db";
 import { cookies } from "next/headers";
-import { randomBytes } from "crypto";
+import { randomBytes, createHash, timingSafeEqual } from "crypto";
 import bcrypt from "bcryptjs";
+import { logger } from "@/lib/logger";
+import { ruoloSchema } from "@/lib/validation";
 
 // Il prefisso __Host- è un marker di sicurezza che i browser moderni
 // riconoscono: impone che il cookie sia Path=/, Secure, e senza attributo
@@ -23,7 +25,20 @@ export function getSessionCookieName(): string {
 // cambiano NODE_ENV a runtime, usare getSessionCookieName().
 export const SESSION_COOKIE = getSessionCookieName();
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 8; // 8 ore (ridotto da 7 giorni per sicurezza)
+const SESSION_DURATION_SEC = Math.floor(SESSION_DURATION_MS / 1000);
 const BCRYPT_COST = 12; // raccomandazione moderna OWASP
+
+// I token di sessione vengono hashati con SHA-256 prima di essere
+// memorizzati nel database. Il cookie HTTP-only contiene il token
+// originale (256 bit di entropia), mentre nel DB persiste solo il
+// digest: in caso di compromissione del database (dump, backup leak,
+// accesso insider) l'attaccante non ottiene token utilizzabili per
+// impersonare gli utenti attivi. SHA-256 è sufficiente perché il
+// token ha già 256 bit di entropia: un attacco brute-force sul digest
+// è computazionalmente equivalente a indovinare il token originale.
+function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
 
 export type SessionUser = {
   id: string;
@@ -52,13 +67,14 @@ export async function verifyPassword(
 
 export async function createSession(userId: string): Promise<string> {
   const token = randomBytes(32).toString("hex");
+  const tokenHash = hashToken(token);
   const scadenza = new Date(Date.now() + SESSION_DURATION_MS);
 
   // L1: invalida tutte le sessioni precedenti dello stesso utente (session rotation)
   // per prevenire session fixation. Mantiene solo la nuova sessione.
   await db.$transaction([
     db.sessione.deleteMany({ where: { userId } }),
-    db.sessione.create({ data: { userId, token, scadenza } }),
+    db.sessione.create({ data: { userId, token: tokenHash, scadenza } }),
   ]);
   return token;
 }
@@ -68,22 +84,44 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   const token = cookieStore.get(getSessionCookieName())?.value;
   if (!token) return null;
 
+  // Lookup tramite hash del token: il digest nel DB non è utilizzabile
+  // direttamente come sessione attiva anche in caso di leak del DB.
+  const tokenHash = hashToken(token);
   const sessione = await db.sessione.findUnique({
-    where: { token },
+    where: { token: tokenHash },
     include: { user: true },
   });
   if (!sessione) return null;
   if (sessione.scadenza < new Date()) {
-    await db.sessione.delete({ where: { id: sessione.id } }).catch(() => {});
+    await db.sessione.delete({ where: { id: sessione.id } }).catch((e: unknown) => {
+      logger.warn({ err: e }, "Errore non bloccante durante eliminazione sessione scaduta");
+    });
     return null;
   }
-  if (!sessione.user.attivo) return null;
+  if (!sessione.user.attivo) {
+    // L'utente è stato disattivato dopo l'emissione del cookie di sessione
+    // (es. admin ha settato attivo=false nel pannello). Invalida subito la
+    // sessione per evitare che resti valida fino alla scadenza naturale.
+    await db.sessione.delete({ where: { id: sessione.id } }).catch((e: unknown) => {
+      logger.warn({ err: e, userId: sessione.user.id }, "Errore non bloccante durante eliminazione sessione di utente disattivato");
+    });
+    return null;
+  }
+
+  // Validazione runtime del ruolo: previene che un valore anomalo nel DB
+  // (schema drift, edit manuale, migrazione futura) produca un SessionUser
+  // con ruolo non gestito dai controlli di autorizzazione downstream.
+  const ruoloResult = ruoloSchema.safeParse(sessione.user.ruolo);
+  if (!ruoloResult.success) {
+    logger.error({ userId: sessione.user.id, ruolo: sessione.user.ruolo }, "Ruolo utente non valido nel DB, sessione rifiutata");
+    return null;
+  }
 
   return {
     id: sessione.user.id,
     email: sessione.user.email,
     nomeCognome: sessione.user.nomeCognome,
-    ruolo: sessione.user.ruolo as SessionUser["ruolo"],
+    ruolo: ruoloResult.data,
     provinciaId: sessione.user.provinciaId,
     regioneId: sessione.user.regioneId,
     inizialiProtocollo: sessione.user.inizialiProtocollo,
@@ -98,7 +136,9 @@ export async function destroySession(): Promise<void> {
   const cookieStore = await cookies();
   const token = cookieStore.get(getSessionCookieName())?.value;
   if (token) {
-    await db.sessione.deleteMany({ where: { token } }).catch(() => {});
+    await db.sessione.deleteMany({ where: { token: hashToken(token) } }).catch((e: unknown) => {
+      logger.warn({ err: e }, "Errore non bloccante durante distruzione sessione");
+    });
   }
 }
 
@@ -111,13 +151,31 @@ export function setSessionCookie(token: string): string {
   const scadenza = new Date(Date.now() + SESSION_DURATION_MS);
   const cookieName = getSessionCookieName();
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  return `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict${secure}; Expires=${scadenza.toUTCString()}; Max-Age=${SESSION_DURATION_MS / 1000}`;
+  return `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict${secure}; Expires=${scadenza.toUTCString()}; Max-Age=${SESSION_DURATION_SEC}`;
 }
 
 export function clearSessionCookie(): string {
   const cookieName = getSessionCookieName();
   const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
   return `${cookieName}=; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=0`;
+}
+
+/**
+ * Confronta due stringhe in modo timing-safe. Usato per verifiche
+ * di token/secret dove il tempo di risposta non deve rivelare
+ * informazioni sul valore atteso (timing side-channel).
+ *
+ * L'implementazione fa un hash SHA-256 di entrambe le stringhe prima
+ * del confronto: questo normalizza la lunghezza (sempre 32 byte), così
+ * l'early return sulla disuguaglianza di lunghezza non può rivelare
+ * informazioni sulla lunghezza del secret atteso. L'hash è
+ * deterministico e non introduce entropia aggiuntiva: la sicurezza
+ * resta legata al confronto byte-a-byte timing-safe sul digest.
+ */
+export function timingSafeEqualStrings(a: string, b: string): boolean {
+  const hashA = createHash("sha256").update(a, "utf8").digest();
+  const hashB = createHash("sha256").update(b, "utf8").digest();
+  return timingSafeEqual(hashA, hashB);
 }
 
 // ---------------------------------------------------------------------------

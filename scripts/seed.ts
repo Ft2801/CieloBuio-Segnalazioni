@@ -236,11 +236,15 @@ async function main() {
   console.log("resta scritta nei file del repository.");
 }
 
-main()
-  .catch((e) => {
+async function run() {
+  try {
+    await main();
+  } catch (e) {
     console.error("Errore durante il seed:", e);
-    process.exit(1);
-  })
-  .finally(async () => {
     await prisma.$disconnect();
-  });
+    process.exit(1);
+  }
+  await prisma.$disconnect();
+}
+
+run();
