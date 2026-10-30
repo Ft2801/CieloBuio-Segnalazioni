@@ -14,10 +14,14 @@ import { nuovoUtenteSchema, validate } from "@/lib/validation";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { Prisma } from "@prisma/client";
 import { logger } from "@/lib/logger";
+import { normalizzaStringaFacoltativa, leggiBodyOggetto, normalizzaIdNumerico } from "@/lib/http";
 
 export async function GET() {
   const user = await getSessionUser();
-  if (!user || !canManageConfiguration(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canManageConfiguration(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
@@ -46,7 +50,10 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const user = await getSessionUser();
-  if (!user || !canManageConfiguration(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canManageConfiguration(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
@@ -60,7 +67,7 @@ export async function POST(req: NextRequest) {
     30, // maxAttempts
     60 * 60 * 1000, // windowMs = 1 ora
     60 * 60 * 1000, // blockResetMs = 1 ora
-    15 * 60 * 1000 // lockMs = 15 minuti
+    15 * 60 * 1000, // lockMs = 15 minuti
   );
   if (!rl.allowed) {
     const minuti = Math.ceil(rl.retryAfterSeconds / 60);
@@ -71,22 +78,25 @@ export async function POST(req: NextRequest) {
       {
         status: 429,
         headers: { "Retry-After": String(rl.retryAfterSeconds) },
-      }
+      },
     );
   }
 
-  const body = await req.json().catch(() => ({}));
+  const body = await leggiBodyOggetto(req);
+  if (!body) {
+    return NextResponse.json({ error: "Corpo della richiesta non valido" }, { status: 400 });
+  }
 
   // Normalizza: campi stringa vuota -> undefined per i campi nullable
   const normalized = {
     ...body,
-    provinciaId: body.provinciaId ? Number(body.provinciaId) : null,
-    regioneId: body.regioneId ? Number(body.regioneId) : null,
-    pec: body.pec || null,
-    emailOrdinaria: body.emailOrdinaria || null,
-    indirizzo: body.indirizzo || null,
-    firma: body.firma || null,
-    inizialiProtocollo: body.inizialiProtocollo || null,
+    provinciaId: normalizzaIdNumerico(body.provinciaId),
+    regioneId: normalizzaIdNumerico(body.regioneId),
+    pec: normalizzaStringaFacoltativa(body.pec),
+    emailOrdinaria: normalizzaStringaFacoltativa(body.emailOrdinaria),
+    indirizzo: normalizzaStringaFacoltativa(body.indirizzo),
+    firma: normalizzaStringaFacoltativa(body.firma),
+    inizialiProtocollo: normalizzaStringaFacoltativa(body.inizialiProtocollo),
   };
 
   const validation = validate(nuovoUtenteSchema, normalized);
@@ -127,9 +137,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Email già in uso" }, { status: 400 });
     }
     logger.error({ err: e }, "Errore creazione utente");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }

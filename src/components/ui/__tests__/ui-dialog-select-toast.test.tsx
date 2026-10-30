@@ -2,8 +2,8 @@
  * Test di rendering per i componenti UI shadcn/ui complessi:
  * Dialog, Select, Toast, Toaster.
  */
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { describe, it, expect } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import {
@@ -28,7 +28,7 @@ import {
   SelectScrollUpButton,
   SelectScrollDownButton,
 } from "@/components/ui/select";
-import { ToastProvider, Toast, ToastTitle, ToastDescription, ToastClose, ToastAction, ToastViewport } from "@/components/ui/toast";
+import { ToastProvider, Toast, ToastTitle, ToastClose, ToastAction, ToastViewport } from "@/components/ui/toast";
 
 describe("Dialog", () => {
   it("renderizza trigger e apre dialog al click", async () => {
@@ -43,7 +43,7 @@ describe("Dialog", () => {
           </DialogHeader>
           <DialogFooter>Footer</DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog>,
     );
     expect(screen.getByText("Apri")).toBeInTheDocument();
     await user.click(screen.getByText("Apri"));
@@ -55,14 +55,13 @@ describe("Dialog", () => {
   });
 
   it("DialogClose renderizza un button close", async () => {
-    const user = userEvent.setup();
     render(
       <Dialog defaultOpen>
         <DialogContent>
           <DialogTitle>Titolo</DialogTitle>
           <DialogClose>Chiudi</DialogClose>
         </DialogContent>
-      </Dialog>
+      </Dialog>,
     );
     expect(screen.getAllByText("Chiudi")[0]).toBeInTheDocument();
   });
@@ -82,12 +81,12 @@ describe("Select", () => {
             <SelectItem value="b">Opzione B</SelectItem>
           </SelectGroup>
         </SelectContent>
-      </Select>
+      </Select>,
     );
     expect(screen.getByText("Scegli...")).toBeInTheDocument();
   });
 
-  it("SelectTrigger mostra icona (renderizza senza errori)", () => {
+  it("SelectTrigger accetta attributi personalizzati (smoke test di rendering)", () => {
     const { container } = render(
       <Select>
         <SelectTrigger data-testid="trigger">
@@ -96,7 +95,7 @@ describe("Select", () => {
         <SelectContent>
           <SelectItem value="a">A</SelectItem>
         </SelectContent>
-      </Select>
+      </Select>,
     );
     expect(container.querySelector("[data-testid='trigger']")).toBeInTheDocument();
   });
@@ -112,7 +111,7 @@ describe("Select", () => {
           <SelectSeparator className="custom-sep" />
           <SelectItem value="b">B</SelectItem>
         </SelectContent>
-      </Select>
+      </Select>,
     );
     expect(container.querySelector("[data-testid='trigger']")).toBeInTheDocument();
   });
@@ -129,7 +128,7 @@ describe("Select", () => {
           <SelectItem value="b">B</SelectItem>
           <SelectScrollDownButton className="custom-down" />
         </SelectContent>
-      </Select>
+      </Select>,
     );
     expect(container.querySelector("[data-testid='trigger']")).toBeInTheDocument();
   });
@@ -140,7 +139,7 @@ describe("Toast", () => {
     const { container } = render(
       <ToastProvider>
         <div>Content</div>
-      </ToastProvider>
+      </ToastProvider>,
     );
     expect(container.textContent).toContain("Content");
   });
@@ -149,7 +148,7 @@ describe("Toast", () => {
     const { container } = render(
       <ToastProvider>
         <ToastViewport className="custom-viewport" />
-      </ToastProvider>
+      </ToastProvider>,
     );
     expect(container).toBeInTheDocument();
   });
@@ -166,12 +165,12 @@ describe("Toast", () => {
           </ToastAction>
           <ToastClose />
         </Toast>
-      </ToastProvider>
+      </ToastProvider>,
     );
     expect(container).toBeInTheDocument();
   });
 
-  it("ToastAction con variant destructive (riga 65 rami group-[.destructive])", () => {
+  it("ToastAction con variant destructive (smoke test di rendering)", () => {
     const { container } = render(
       <ToastProvider duration={0}>
         <Toast duration={0} defaultOpen variant="destructive">
@@ -181,7 +180,7 @@ describe("Toast", () => {
           </ToastAction>
           <ToastClose />
         </Toast>
-      </ToastProvider>
+      </ToastProvider>,
     );
     expect(container).toBeInTheDocument();
   });

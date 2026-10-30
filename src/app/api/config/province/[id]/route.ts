@@ -14,30 +14,34 @@ import { Prisma } from "@prisma/client";
 import { getSessionUser, canManageConfiguration } from "@/lib/auth";
 import { nuovaProvinciaSchema, validate } from "@/lib/validation";
 import { logger } from "@/lib/logger";
+import { normalizzaStringaFacoltativa, leggiBodyOggetto, normalizzaIdNumerico, parseIdIntero } from "@/lib/http";
+import { messaggioDaErrore } from "@/lib/errori";
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function PUT(req: NextRequest, { params }: Params) {
   const user = await getSessionUser();
-  if (!user || !canManageConfiguration(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canManageConfiguration(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
   const { id } = await params;
-  const provinciaId = Number(id);
-  if (isNaN(provinciaId)) {
+  const provinciaId = parseIdIntero(id);
+  if (provinciaId === null) {
     return NextResponse.json({ error: "ID non valido" }, { status: 400 });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const regioneIdNum = body.regioneId ? Number(body.regioneId) : null;
-  if (regioneIdNum !== null && isNaN(regioneIdNum)) {
-    return NextResponse.json({ error: "regioneId non valido" }, { status: 400 });
+  const body = await leggiBodyOggetto(req);
+  if (!body) {
+    return NextResponse.json({ error: "Corpo della richiesta non valido" }, { status: 400 });
   }
   const normalized = {
     ...body,
-    regioneId: regioneIdNum,
-    pecArpaProvinciale: body.pecArpaProvinciale || null,
+    regioneId: normalizzaIdNumerico(body.regioneId),
+    pecArpaProvinciale: normalizzaStringaFacoltativa(body.pecArpaProvinciale),
   };
   const validation = validate(nuovaProvinciaSchema, normalized);
   if (!validation.success) {
@@ -46,9 +50,22 @@ export async function PUT(req: NextRequest, { params }: Params) {
 
   const data = validation.data;
   try {
-    const existing = await db.provincia.findUnique({ where: { id: provinciaId } });
+    const existing = await db.provincia.findUnique({
+      where: { id: provinciaId },
+      include: { _count: { select: { segnalazioni: true } } },
+    });
     if (!existing) {
       return NextResponse.json({ error: "Provincia non trovata" }, { status: 404 });
+    }
+    // Le segnalazioni conservano la regione di origine: cambiarla con
+    // segnalazioni collegate renderebbe incoerente il routing territoriale.
+    if (data.regioneId !== existing.regioneId && existing._count.segnalazioni > 0) {
+      return NextResponse.json(
+        {
+          error: `Impossibile cambiare regione: la provincia ha ${existing._count.segnalazioni} segnalazione/i collegate, che manterrebbero la regione di origine.`,
+        },
+        { status: 400 },
+      );
     }
 
     const aggiornata = await db.provincia.update({
@@ -62,23 +79,40 @@ export async function PUT(req: NextRequest, { params }: Params) {
     });
     return NextResponse.json({ provincia: aggiornata });
   } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      if (e.code === "P2002") {
+        return NextResponse.json({ error: "Sigla già presente" }, { status: 400 });
+      }
+      if (e.code === "P2003") {
+        return NextResponse.json(
+          {
+            error:
+              "Regione non trovata o territorio collegato a segnalazioni. Verificare i dati e ricaricare la pagina.",
+          },
+          { status: 400 },
+        );
+      }
+      if (e.code === "P2025") {
+        return NextResponse.json({ error: "Provincia non trovata" }, { status: 404 });
+      }
+    }
     logger.error({ err: e }, "Errore modifica provincia");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
   const user = await getSessionUser();
-  if (!user || !canManageConfiguration(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canManageConfiguration(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
   const { id } = await params;
-  const provinciaId = Number(id);
-  if (isNaN(provinciaId)) {
+  const provinciaId = parseIdIntero(id);
+  if (provinciaId === null) {
     return NextResponse.json({ error: "ID non valido" }, { status: 400 });
   }
 
@@ -93,14 +127,16 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
 
     if (existing._count.comuni > 0) {
       return NextResponse.json(
-        { error: `Impossibile eliminare: la provincia ha ${existing._count.comuni} comune/i collegati. Eliminare prima i comuni.` },
-        { status: 400 }
+        {
+          error: `Impossibile eliminare: la provincia ha ${existing._count.comuni} comune/i collegati. Eliminare prima i comuni.`,
+        },
+        { status: 400 },
       );
     }
     if (existing._count.segnalazioni > 0) {
       return NextResponse.json(
         { error: `Impossibile eliminare: la provincia ha ${existing._count.segnalazioni} segnalazione/i collegate.` },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -110,8 +146,10 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
     });
     if (referentiCount > 0) {
       return NextResponse.json(
-        { error: `Impossibile eliminare: la provincia ha ${referentiCount} referente/i provinciale/i assegnato/i. Riassegna o disattiva prima i referenti.` },
-        { status: 400 }
+        {
+          error: `Impossibile eliminare: la provincia ha ${referentiCount} referente/i provinciale/i assegnato/i. Riassegna o disattiva prima i referenti.`,
+        },
+        { status: 400 },
       );
     }
 
@@ -138,45 +176,44 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
       });
       return NextResponse.json({ ok: true });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = messaggioDaErrore(e);
       if (msg.startsWith("COMUNI_COLLEGATI:")) {
         const n = msg.split(":")[1];
         return NextResponse.json(
           { error: `Impossibile eliminare: la provincia ha ${n} comune/i collegati. Eliminare prima i comuni.` },
-          { status: 400 }
+          { status: 400 },
         );
       }
       if (msg.startsWith("SEGNALAZIONI_COLLEGATE:")) {
         const n = msg.split(":")[1];
         return NextResponse.json(
           { error: `Impossibile eliminare: la provincia ha ${n} segnalazione/i collegate.` },
-          { status: 400 }
+          { status: 400 },
         );
       }
       if (msg.startsWith("REFERENTI_ASSEGNATI:")) {
         const n = msg.split(":")[1];
         return NextResponse.json(
-          { error: `Impossibile eliminare: la provincia ha ${n} referente/i provinciale/i assegnato/i. Riassegna o disattiva prima i referenti.` },
-          { status: 400 }
+          {
+            error: `Impossibile eliminare: la provincia ha ${n} referente/i provinciale/i assegnato/i. Riassegna o disattiva prima i referenti.`,
+          },
+          { status: 400 },
         );
       }
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
         return NextResponse.json(
-          { error: "Impossibile eliminare: una nuova dipendenza è stata creata concorrentemente. Ricarica la pagina e riprova." },
-          { status: 409 }
+          {
+            error:
+              "Impossibile eliminare: una nuova dipendenza è stata creata concorrentemente. Ricarica la pagina e riprova.",
+          },
+          { status: 409 },
         );
       }
       logger.error({ err: e }, "Errore eliminazione provincia");
-      return NextResponse.json(
-        { error: "Errore interno del server" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
     }
   } catch (e) {
     logger.error({ err: e }, "Errore eliminazione provincia");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }

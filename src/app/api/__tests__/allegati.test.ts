@@ -11,7 +11,7 @@
  * - Path traversal protection (id malformato, "..", segnalazioneId mismatch)
  * - Content-Disposition: attachment (download) vs inline (preview)
  * - Content-Type basato su estensione, sanitizzazione filename
- * - urlStorage legacy (api/allegatiplaceholder/<id>/<file>)
+ * - urlStorage fuori dal formato <segnalazioneId>/<file>
  * - unlink error ignorato (file non presente su disco)
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -23,10 +23,12 @@ vi.mock("fs/promises", () => ({
   unlink: vi.fn().mockResolvedValue(undefined),
   readFile: vi.fn(),
   stat: vi.fn(),
+  lstat: vi.fn().mockResolvedValue({ isSymbolicLink: () => false }),
 }));
 
 vi.mock("@/lib/db", () => {
   const mockDb = {
+    segnalazione: { update: vi.fn().mockResolvedValue({}) },
     allegato: {
       findUnique: vi.fn(),
       delete: vi.fn(),
@@ -36,6 +38,7 @@ vi.mock("@/lib/db", () => {
       findUnique: vi.fn(),
       delete: vi.fn().mockResolvedValue({}),
     },
+    $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
   };
   mockDb.$transaction.mockImplementation(async (cb) => {
@@ -79,45 +82,87 @@ type MockSession = {
 };
 
 const VOL_SESSION: MockSession = {
-  id: "s1", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s1",
+  token: "tok",
+  scadenza: new Date(Date.now() + 10000),
   user: {
-    id: "u-vol", email: "vol@t.it", nomeCognome: "Volontario", ruolo: "volontario",
-    provinciaId: null, regioneId: null, inizialiProtocollo: "VL",
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true,
+    id: "u-vol",
+    email: "vol@t.it",
+    nomeCognome: "Volontario",
+    ruolo: "volontario",
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: "VL",
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
+    attivo: true,
   },
 };
 const ADMIN_SESSION: MockSession = {
-  id: "s2", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s2",
+  token: "tok",
+  scadenza: new Date(Date.now() + 10000),
   user: {
-    id: "u-admin", email: "admin@t.it", nomeCognome: "Admin", ruolo: "admin",
-    provinciaId: null, regioneId: null, inizialiProtocollo: "AD",
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true,
+    id: "u-admin",
+    email: "admin@t.it",
+    nomeCognome: "Admin",
+    ruolo: "admin",
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: "AD",
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
+    attivo: true,
   },
 };
 const REF_PROV_SESSION: MockSession = {
-  id: "s3", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s3",
+  token: "tok",
+  scadenza: new Date(Date.now() + 10000),
   user: {
-    id: "u-ref-prov", email: "refprov@t.it", nomeCognome: "Ref Prov",
+    id: "u-ref-prov",
+    email: "refprov@t.it",
+    nomeCognome: "Ref Prov",
     ruolo: "referente_provinciale",
-    provinciaId: 5, regioneId: null, inizialiProtocollo: "RP",
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true,
+    provinciaId: 5,
+    regioneId: null,
+    inizialiProtocollo: "RP",
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
+    attivo: true,
   },
 };
 const REF_REG_SESSION: MockSession = {
-  id: "s4", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s4",
+  token: "tok",
+  scadenza: new Date(Date.now() + 10000),
   user: {
-    id: "u-ref-reg", email: "refreg@t.it", nomeCognome: "Ref Reg",
+    id: "u-ref-reg",
+    email: "refreg@t.it",
+    nomeCognome: "Ref Reg",
     ruolo: "referente_regionale",
-    provinciaId: null, regioneId: 3, inizialiProtocollo: "RR",
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true,
+    provinciaId: null,
+    regioneId: 3,
+    inizialiProtocollo: "RR",
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
+    attivo: true,
   },
 };
 
 function mockSession(user: MockSession | null) {
   vi.mocked(cookies).mockResolvedValue({
     get: () => (user ? { value: "tok" } : undefined),
-  } as any);
-  vi.mocked(db.sessione.findUnique).mockResolvedValue((user ?? null) as any);
+  } as never);
+  vi.mocked(db.sessione.findUnique).mockResolvedValue((user ?? null) as never);
 }
 
 // Costruisce un allegato mock con segnalazione inclusa
@@ -140,9 +185,7 @@ function mockAllegato(overrides: Record<string, unknown> = {}) {
 }
 
 function makeDeleteReq(id?: string | null): NextRequest {
-  const url = id
-    ? `http://localhost/api/allegati?id=${encodeURIComponent(id)}`
-    : "http://localhost/api/allegati";
+  const url = id ? `http://localhost/api/allegati?id=${encodeURIComponent(id)}` : "http://localhost/api/allegati";
   return new NextRequest(url, { method: "DELETE" });
 }
 
@@ -189,7 +232,7 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "approvata", volontarioId: "u-vol", provinciaId: 5, regioneId: 3 },
-      }) as any
+      }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(400);
@@ -203,7 +246,7 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "bozza", volontarioId: "altro-utente", provinciaId: 5, regioneId: 3 },
-      }) as any
+      }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(403);
@@ -218,7 +261,7 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "in_revisione", volontarioId: "u-vol", provinciaId: 5, regioneId: 3 },
-      }) as any
+      }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(403);
@@ -226,7 +269,7 @@ describe("DELETE /api/allegati", () => {
 
   it("ritorna 200 se proprietario elimina in stato bozza", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as any);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -234,7 +277,9 @@ describe("DELETE /api/allegati", () => {
     // Verifica che unlink sia stato chiamato (file eliminato da disco)
     expect(unlink).toHaveBeenCalledTimes(1);
     // Verifica che delete DB sia stato chiamato
-    expect(db.allegato.deleteMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: "a1" }) }));
+    expect(db.allegato.deleteMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: "a1" }) }),
+    );
   });
 
   it("ritorna 200 se admin elimina in stato in_revisione", async () => {
@@ -242,7 +287,7 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "in_revisione", volontarioId: "u-vol", provinciaId: 5, regioneId: 3 },
-      }) as any
+      }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
@@ -253,7 +298,7 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "in_revisione", volontarioId: "u-vol", provinciaId: 5, regioneId: 3 },
-      }) as any
+      }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
@@ -264,7 +309,7 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "bozza", volontarioId: "altro", provinciaId: 99, regioneId: 3 },
-      }) as any
+      }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(403);
@@ -277,7 +322,7 @@ describe("DELETE /api/allegati", () => {
       user: { ...REF_PROV_SESSION.user, provinciaId: null },
     };
     mockSession(REF_NO_PROV);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as any);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(403);
   });
@@ -287,7 +332,7 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "in_revisione", volontarioId: "u-vol", provinciaId: 5, regioneId: 3 },
-      }) as any
+      }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
@@ -298,7 +343,7 @@ describe("DELETE /api/allegati", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "bozza", volontarioId: "altro", provinciaId: 5, regioneId: 99 },
-      }) as any
+      }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(403);
@@ -306,7 +351,7 @@ describe("DELETE /api/allegati", () => {
 
   it("ignora errore unlink se file non esiste su disco", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as any);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
     vi.mocked(unlink).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     const res = await DELETE(makeDeleteReq("a1"));
     // L'errore unlink è ignorato: il record DB viene comunque eliminato
@@ -317,7 +362,7 @@ describe("DELETE /api/allegati", () => {
   it("skip unlink se urlStorage malformato, ma elimina record DB", async () => {
     mockSession(VOL_SESSION);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "formato-malformato-senza-slash" }) as any
+      mockAllegato({ urlStorage: "formato-malformato-senza-slash" }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
@@ -327,21 +372,64 @@ describe("DELETE /api/allegati", () => {
     expect(db.allegato.deleteMany).toHaveBeenCalled();
   });
 
-  it("gestisce urlStorage legacy (api/allegatiplaceholder/<id>/<file>)", async () => {
+  it("urlStorage fuori formato: il record viene eliminato senza rimuovere file", async () => {
     mockSession(VOL_SESSION);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "api/allegatiplaceholder/s1/old-file.jpg" }) as any
+      mockAllegato({ urlStorage: "formato/non/valido/s1/old-file.jpg" }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
-    // unlink viene chiamato con il path legacy ricostruito
-    expect(unlink).toHaveBeenCalledTimes(1);
+    expect(db.allegato.deleteMany).toHaveBeenCalled();
+    expect(unlink).not.toHaveBeenCalled();
+  });
+
+  it("non elimina l'allegato se la pratica è approvata mentre acquisisce il lock", async () => {
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique)
+      .mockResolvedValueOnce(mockAllegato() as never)
+      .mockResolvedValueOnce(
+        mockAllegato({
+          segnalazione: { id: "s1", stato: "approvata", volontarioId: "u-vol", provinciaId: 5, regioneId: 3 },
+        }) as never,
+      );
+    const res = await DELETE(makeDeleteReq("a1"));
+    expect(res.status).toBe(404);
+    expect(db.$queryRaw).toHaveBeenCalled();
+    expect(db.allegato.deleteMany).not.toHaveBeenCalled();
+    expect(unlink).not.toHaveBeenCalled();
+  });
+
+  it("non elimina l'allegato se il proprietario cambia dopo il controllo iniziale", async () => {
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique)
+      .mockResolvedValueOnce(mockAllegato() as never)
+      .mockResolvedValueOnce(
+        mockAllegato({
+          segnalazione: { id: "s1", stato: "bozza", volontarioId: "altro", provinciaId: 5, regioneId: 3 },
+        }) as never,
+      );
+    expect((await DELETE(makeDeleteReq("a1"))).status).toBe(404);
+    expect(db.allegato.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("non elimina se l'allegato non esiste più o cambia pratica", async () => {
+    mockSession(ADMIN_SESSION);
+    vi.mocked(db.allegato.findUnique)
+      .mockResolvedValueOnce(mockAllegato() as never)
+      .mockResolvedValueOnce(null);
+    expect((await DELETE(makeDeleteReq("a1"))).status).toBe(404);
+    vi.mocked(db.allegato.findUnique).mockReset();
+    vi.mocked(db.allegato.findUnique)
+      .mockResolvedValueOnce(mockAllegato() as never)
+      .mockResolvedValueOnce(mockAllegato({ segnalazioneId: "altra" }) as never);
+    expect((await DELETE(makeDeleteReq("a1"))).status).toBe(404);
+    expect(db.allegato.deleteMany).not.toHaveBeenCalled();
   });
 
   it("skip unlink se segnalazioneId in urlStorage non corrisponde", async () => {
     mockSession(ADMIN_SESSION);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "s1-different/uuid-filename.jpg" }) as any
+      mockAllegato({ urlStorage: "s1-different/uuid-filename.jpg" }) as never,
     );
     const res = await DELETE(makeDeleteReq("a1"));
     expect(res.status).toBe(200);
@@ -381,7 +469,7 @@ describe("GET /api/allegati/[id]/download", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "bozza", volontarioId: "altro", provinciaId: 5, regioneId: 3 },
-      }) as any
+      }) as never,
     );
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
@@ -391,9 +479,7 @@ describe("GET /api/allegati/[id]/download", () => {
 
   it("ritorna 400 se urlStorage con formato non valido", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "formato-malformato" }) as any
-    );
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato({ urlStorage: "formato-malformato" }) as never);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
     });
@@ -404,9 +490,7 @@ describe("GET /api/allegati/[id]/download", () => {
 
   it("ritorna 400 se filename contiene '..' (path traversal)", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "s1/.." }) as any
-    );
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato({ urlStorage: "s1/.." }) as never);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
     });
@@ -417,9 +501,7 @@ describe("GET /api/allegati/[id]/download", () => {
 
   it("ritorna 400 se segnalazioneId in urlStorage non corrisponde", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "s1-different/file.jpg" }) as any
-    );
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato({ urlStorage: "s1-different/file.jpg" }) as never);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
     });
@@ -430,7 +512,7 @@ describe("GET /api/allegati/[id]/download", () => {
 
   it("ritorna 404 se file non trovato su disco (stat throw)", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as any);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
     vi.mocked(stat).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
@@ -442,8 +524,8 @@ describe("GET /api/allegati/[id]/download", () => {
 
   it("ritorna 404 se path è una directory (isFile false)", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as any);
-    vi.mocked(stat).mockResolvedValue({ isFile: () => false } as any);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => false } as never);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
     });
@@ -457,9 +539,9 @@ describe("GET /api/allegati/[id]/download", () => {
       mockAllegato({
         urlStorage: "s1/uuid-filename.jpg",
         nomeOriginale: "foto.jpg",
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(fileBuffer);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
@@ -482,9 +564,9 @@ describe("GET /api/allegati/[id]/download", () => {
       mockAllegato({
         urlStorage: "s1/doc.pdf",
         nomeOriginale: "documento.pdf",
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(pdfBuffer);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
@@ -494,22 +576,19 @@ describe("GET /api/allegati/[id]/download", () => {
     expect(res.headers.get("Content-Disposition")).toContain("documento.pdf");
   });
 
-  it("download con urlStorage legacy ritorna 200", async () => {
+  it("download con urlStorage fuori formato ritorna 400", async () => {
     mockSession(VOL_SESSION);
-    const fileBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
-        urlStorage: "api/allegatiplaceholder/s1/old-photo.png",
+        urlStorage: "formato/non/valido/s1/old-photo.png",
         nomeOriginale: "old-photo.png",
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
-    vi.mocked(readFile).mockResolvedValue(fileBuffer);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
     });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Type")).toBe("image/png");
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("Path non valido");
   });
 
   it("sanitizza Content-Disposition per filename con caratteri speciali", async () => {
@@ -519,21 +598,16 @@ describe("GET /api/allegati/[id]/download", () => {
       mockAllegato({
         urlStorage: "s1/uuid.jpg",
         nomeOriginale: 'foto"<evil>.jpg',
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(fileBuffer);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
     });
     expect(res.status).toBe(200);
-    const cd = res.headers.get("Content-Disposition") ?? "";
-    // I caratteri non word/dot/dash/space vengono sostituiti con "_"
-    expect(cd).not.toContain("<");
-    expect(cd).not.toContain(">");
-    expect(cd).not.toContain('" evil');
-    expect(cd).toContain("foto");
-    expect(cd).toContain(".jpg");
+    // I caratteri fuori da [\w.\- ] (virgolette, parentesi angolari) diventano "_"
+    expect(res.headers.get("Content-Disposition")).toBe('attachment; filename="foto__evil_.jpg"');
   });
 
   it("admin può scaricare allegato di segnalazione altrui", async () => {
@@ -542,9 +616,9 @@ describe("GET /api/allegati/[id]/download", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "bozza", volontarioId: "altro-utente", provinciaId: 5, regioneId: 3 },
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(fileBuffer);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
@@ -581,7 +655,7 @@ describe("GET /api/allegati/[id]/preview", () => {
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         segnalazione: { id: "s1", stato: "bozza", volontarioId: "altro", provinciaId: 5, regioneId: 3 },
-      }) as any
+      }) as never,
     );
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
@@ -591,9 +665,7 @@ describe("GET /api/allegati/[id]/preview", () => {
 
   it("ritorna 400 se path traversal (filename con '..')", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "s1/.." }) as any
-    );
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato({ urlStorage: "s1/.." }) as never);
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
     });
@@ -607,9 +679,9 @@ describe("GET /api/allegati/[id]/preview", () => {
       mockAllegato({
         urlStorage: "s1/uuid-filename.jpg",
         nomeOriginale: "foto.jpg",
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(fileBuffer);
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
@@ -630,9 +702,9 @@ describe("GET /api/allegati/[id]/preview", () => {
       mockAllegato({
         urlStorage: "s1/uuid-doc.pdf",
         nomeOriginale: "documento.pdf",
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(pdfBuffer);
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
@@ -651,9 +723,9 @@ describe("GET /api/allegati/[id]/preview", () => {
       mockAllegato({
         urlStorage: "s1/image.png",
         nomeOriginale: "image.png",
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(fileBuffer);
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
@@ -664,7 +736,7 @@ describe("GET /api/allegati/[id]/preview", () => {
 
   it("ritorna 404 se file non trovato su disco (stat throw)", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as any);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
     vi.mocked(stat).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
@@ -674,8 +746,20 @@ describe("GET /api/allegati/[id]/preview", () => {
 
   it("ritorna 400 se urlStorage con formato non valido", async () => {
     mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato({ urlStorage: "malformato" }) as never);
+    const res = await PREVIEW(makeGetReq("a1", "preview"), {
+      params: Promise.resolve({ id: "a1" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("preview con urlStorage fuori formato ritorna 400", async () => {
+    mockSession(VOL_SESSION);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "malformato" }) as any
+      mockAllegato({
+        urlStorage: "formato/non/valido/s1/old-photo.jpg",
+        nomeOriginale: "old-photo.jpg",
+      }) as never,
     );
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
@@ -683,29 +767,9 @@ describe("GET /api/allegati/[id]/preview", () => {
     expect(res.status).toBe(400);
   });
 
-  it("preview con urlStorage legacy (api/allegatiplaceholder) ritorna 200", async () => {
-    mockSession(VOL_SESSION);
-    const fileBuffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({
-        urlStorage: "api/allegatiplaceholder/s1/old-photo.jpg",
-        nomeOriginale: "old-photo.jpg",
-      }) as any
-    );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
-    vi.mocked(readFile).mockResolvedValue(fileBuffer);
-    const res = await PREVIEW(makeGetReq("a1", "preview"), {
-      params: Promise.resolve({ id: "a1" }),
-    });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Disposition")).toContain("inline");
-  });
-
   it("ritorna 400 se segnalazioneId in urlStorage non corrisponde (preview)", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(
-      mockAllegato({ urlStorage: "s1-different/file.jpg" }) as any
-    );
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato({ urlStorage: "s1-different/file.jpg" }) as never);
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
     });
@@ -714,8 +778,8 @@ describe("GET /api/allegati/[id]/preview", () => {
 
   it("ritorna 404 se path è una directory (isFile false, preview)", async () => {
     mockSession(VOL_SESSION);
-    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as any);
-    vi.mocked(stat).mockResolvedValue({ isFile: () => false } as any);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => false } as never);
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
     });
@@ -729,9 +793,9 @@ describe("GET /api/allegati/[id]/preview", () => {
       mockAllegato({
         urlStorage: "s1/file.txt",
         nomeOriginale: "file.txt",
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(fileBuffer);
     const res = await PREVIEW(makeGetReq("a1", "preview"), {
       params: Promise.resolve({ id: "a1" }),
@@ -754,9 +818,9 @@ describe("GET /api/allegati/[id]/download - edge cases", () => {
       mockAllegato({
         urlStorage: "s1/file.txt",
         nomeOriginale: "file.txt",
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(fileBuffer);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
@@ -767,22 +831,165 @@ describe("GET /api/allegati/[id]/download - edge cases", () => {
 
   it("download WebP ritorna 200 con Content-Type image/webp", async () => {
     mockSession(VOL_SESSION);
-    const fileBuffer = Buffer.from([
-      0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00,
-      0x57, 0x45, 0x42, 0x50,
-    ]);
+    const fileBuffer = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]);
     vi.mocked(db.allegato.findUnique).mockResolvedValue(
       mockAllegato({
         urlStorage: "s1/image.webp",
         nomeOriginale: "image.webp",
-      }) as any
+      }) as never,
     );
-    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as any);
+    vi.mocked(stat).mockResolvedValue({ isFile: () => true } as never);
     vi.mocked(readFile).mockResolvedValue(fileBuffer);
     const res = await DOWNLOAD(makeGetReq("a1", "download"), {
       params: Promise.resolve({ id: "a1" }),
     });
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("image/webp");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// DELETE /api/allegati - rami residui
+// -----------------------------------------------------------------------------
+describe("DELETE /api/allegati - rami residui", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("ritorna 404 se nessuna riga viene eliminata (allegato già rimosso o stato cambiato)", async () => {
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
+    vi.mocked(db.allegato.deleteMany).mockResolvedValue({ count: 0 });
+    const res = await DELETE(makeDeleteReq("a1"));
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toContain("non più modificabile");
+  });
+
+  it("elimina l'allegato senza tentare la rimozione del file se urlStorage non è riconoscibile", async () => {
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(
+      mockAllegato({ urlStorage: "https://esterno.example/x.jpg" }) as never,
+    );
+    vi.mocked(db.allegato.deleteMany).mockResolvedValue({ count: 1 });
+    const res = await DELETE(makeDeleteReq("a1"));
+    expect(res.status).toBe(200);
+    expect(unlink).not.toHaveBeenCalled();
+    expect(db.allegato.deleteMany).toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// download e preview di file senza estensione (ramo ext vuota)
+// -----------------------------------------------------------------------------
+describe("allegati download e preview - file senza estensione", () => {
+  it("download di un file senza estensione risponde 200", async () => {
+    const fsMock = await import("fs/promises");
+    vi.mocked(fsMock.readFile).mockResolvedValue(Buffer.from("contenuto") as never);
+    vi.mocked(fsMock.stat).mockResolvedValue({ isFile: () => true } as never);
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(
+      mockAllegato({ urlStorage: "s1/uuidsenzaestensione", nomeOriginale: "documento" }) as never,
+    );
+    const res = await DOWNLOAD(makeGetReq("a1", "download"), {
+      params: Promise.resolve({ id: "a1" }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/octet-stream");
+  });
+
+  it("preview di un file senza estensione risponde con un mime generico", async () => {
+    const fsMock = await import("fs/promises");
+    vi.mocked(fsMock.readFile).mockResolvedValue(Buffer.from("contenuto") as never);
+    vi.mocked(fsMock.stat).mockResolvedValue({ isFile: () => true } as never);
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(
+      mockAllegato({ urlStorage: "s1/uuidsenzaestensione", nomeOriginale: "documento" }) as never,
+    );
+    const res = await PREVIEW(makeGetReq("a1", "preview"), {
+      params: Promise.resolve({ id: "a1" }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("application/octet-stream");
+  });
+});
+
+// Il percorso degli allegati è risolto da path-guard: il wrapper resta fedele
+// all'implementazione reale e consente di simulare un percorso non risolvibile.
+vi.mock("@/lib/path-guard", async (importOriginale) => {
+  const originale = await importOriginale<typeof import("@/lib/path-guard")>();
+  return { ...originale, risolviPathAllegatoSicuro: vi.fn(originale.risolviPathAllegatoSicuro) };
+});
+
+describe("allegati DELETE - percorso non risolvibile", () => {
+  it("se il percorso non è risolvibile il record viene eliminato senza toccare il file", async () => {
+    const pg = await import("@/lib/path-guard");
+    const fsp = await import("fs/promises");
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
+    vi.mocked(pg.risolviPathAllegatoSicuro).mockReturnValueOnce(null);
+    const res = await DELETE(makeDeleteReq("a1"));
+    expect(res.status).toBe(200);
+    expect(fsp.unlink).not.toHaveBeenCalled();
+  });
+});
+
+describe("allegati download e preview - percorso non risolvibile", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("download ritorna 400 se il percorso del file non è risolvibile in sicurezza", async () => {
+    const pg = await import("@/lib/path-guard");
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
+    vi.mocked(pg.risolviPathAllegatoSicuro).mockReturnValueOnce(null);
+    const res = await DOWNLOAD(makeGetReq("a1", "download"), {
+      params: Promise.resolve({ id: "a1" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("Path non valido");
+  });
+
+  it("preview ritorna 400 se il percorso del file non è risolvibile in sicurezza", async () => {
+    const pg = await import("@/lib/path-guard");
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
+    vi.mocked(pg.risolviPathAllegatoSicuro).mockReturnValueOnce(null);
+    const res = await PREVIEW(makeGetReq("a1", "preview"), {
+      params: Promise.resolve({ id: "a1" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("Path non valido");
+  });
+});
+
+describe("snapshot eliminazione allegato", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSession(VOL_SESSION);
+  });
+  it("risponde 409 senza cancellare il record o il file per una versione non corrente", async () => {
+    const allegato = mockAllegato();
+    vi.mocked(db.allegato.findUnique).mockResolvedValue({
+      ...allegato,
+      segnalazione: { ...allegato.segnalazione, updatedAt: new Date() },
+    } as never);
+    const req = makeDeleteReq("a1");
+    req.headers.set("If-Match", '"obsoleta"');
+    expect((await DELETE(req)).status).toBe(409);
+    expect(db.allegato.deleteMany).not.toHaveBeenCalled();
+    expect(unlink).not.toHaveBeenCalled();
+  });
+});
+
+describe("lettura dello storage privato", () => {
+  it.each([DOWNLOAD, PREVIEW])("non serve file attraverso collegamenti simbolici", async (leggi) => {
+    vi.clearAllMocks();
+    mockSession(VOL_SESSION);
+    vi.mocked(db.allegato.findUnique).mockResolvedValue(mockAllegato() as never);
+    vi.mocked((await import("fs/promises")).lstat).mockResolvedValueOnce({ isSymbolicLink: () => true } as never);
+    const res = await leggi(makeGetReq("a1", "download"), { params: Promise.resolve({ id: "a1" }) });
+    expect(res.status).toBe(404);
+    expect(readFile).not.toHaveBeenCalled();
   });
 });

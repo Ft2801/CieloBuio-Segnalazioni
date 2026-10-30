@@ -1,10 +1,11 @@
 /**
  * Test per i rami residui di lettera.ts in buildLetteraContextFromSegnalazione.
  * Copre:
- * - mittenteVisibile=true con volontario.indirizzo=null (riga 325)
- * - mittenteVisibile=true con volontario.pec=null, emailOrdinaria=null, email valida (riga 330-333)
- * - mittenteVisibile=false con comune.nomeSindaco=null + destinatarioNome=null (riga 344-345)
- * - regione derivata solo da provincia.regione (riga 320, ramo s.regione=null)
+ * - mittenteVisibile=true con volontario.indirizzo=null
+ * - mittenteVisibile=true con volontario.pec=null, emailOrdinaria=null, email valida
+ * - mittenteVisibile=false con comune.nomeSindaco=null + destinatarioNome=null
+ * - regione derivata da provincia.regione quando la regione diretta manca, e il contrario
+ * - volontario anonimizzato (GDPR)
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -55,7 +56,7 @@ describe("buildLetteraContextFromSegnalazione - rami residui", () => {
       regione: null,
       dataSegnalazione: new Date(2026, 0, 15),
       indirizzoVia: "Via 1",
-      cap: "24040",
+      cap: "24049",
       numeroProtocollo: "P1",
       oggettoPec: "O",
       testoIntroduttivoPec: null,
@@ -71,7 +72,7 @@ describe("buildLetteraContextFromSegnalazione - rami residui", () => {
       descrizioneLibera: null,
       destinatarioNome: "Sindaco",
       includiArpa: false,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s1");
     expect(ctx.mittenteIndirizzo).toBe("non disponibile");
@@ -126,14 +127,14 @@ describe("buildLetteraContextFromSegnalazione - rami residui", () => {
       descrizioneLibera: null,
       destinatarioNome: "Sindaco",
       includiArpa: false,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s2");
     expect(ctx.mittenteEmail).toBe("luigi@ord.it");
     expect(ctx.pecArpaRegionale).toBeNull();
   });
 
-  it("mittenteVisibile=false: usa placeholder per nome, indirizzo, email", async () => {
+  it("mittenteVisibile=false: usa il messaggio di configurazione per nome, indirizzo, email", async () => {
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
       id: "s3",
       mittenteVisibile: false,
@@ -180,14 +181,13 @@ describe("buildLetteraContextFromSegnalazione - rami residui", () => {
       descrizioneLibera: null,
       destinatarioNome: null,
       includiArpa: true,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s3");
     expect(ctx.mittenteNome).toBe("Referente CieloBuio");
-    expect(ctx.mittenteIndirizzo).toBe(
-      "CieloBuio, Coordinamento per la protezione del cielo notturno"
-    );
-    expect(ctx.mittenteEmail).toContain("da configurare nel pannello amministrazione");
+    expect(ctx.mittenteIndirizzo).toBe("CieloBuio, Coordinamento per la protezione del cielo notturno");
+    // Senza PEC_FROM il mittente non visibile usa il segnaposto dedicato.
+    expect(ctx.mittenteEmail).toBe("indirizzo PEC non configurato");
     expect(ctx.destinatarioNome).toContain("Sindaco");
     // numeroProtocollo null -> "(da assegnare)"
     expect(ctx.numeroProtocollo).toBe("(da assegnare)");
@@ -239,7 +239,7 @@ describe("buildLetteraContextFromSegnalazione - rami residui", () => {
       descrizioneLibera: null,
       destinatarioNome: "Sindaco",
       includiArpa: false,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s4");
     expect(ctx.regione).toBe("LAZIO");
@@ -255,10 +255,17 @@ describe("buildLetteraContextFromSegnalazione - rami residui", () => {
       provincia: {
         sigla: "RM",
         regione: {
-          regione: "LAZIO", riferimentoLegge: "L.R.",
-          titoloLegge: "T", testoProgettoIlluminotecnico: "a", testoDeroghe: "b",
-          testoDatiFotometrici: "c", testoApprovazione: "d", testoInstallazione: "e",
-          testoControllo: "f", testoSanzioni: "g", pecArpaRegionale: "a@p.it",
+          regione: "LAZIO",
+          riferimentoLegge: "L.R.",
+          titoloLegge: "T",
+          testoProgettoIlluminotecnico: "a",
+          testoDeroghe: "b",
+          testoDatiFotometrici: "c",
+          testoApprovazione: "d",
+          testoInstallazione: "e",
+          testoControllo: "f",
+          testoSanzioni: "g",
+          pecArpaRegionale: "a@p.it",
         },
       },
       regione: null,
@@ -280,7 +287,7 @@ describe("buildLetteraContextFromSegnalazione - rami residui", () => {
       descrizioneLibera: null,
       destinatarioNome: "Sindaco",
       includiArpa: false,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s-anon");
     // Tutti i campi del mittente devono cadere nel fallback "[ANONIMIZZATA]"

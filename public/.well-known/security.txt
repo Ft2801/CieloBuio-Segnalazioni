@@ -1,0 +1,6 @@
+# Politica di divulgazione delle vulnerabilità (RFC 9116)
+Contact: mailto:fabiot2801@gmail.com
+Contact: https://github.com/Ft2801/CieloBuio-Segnalazioni/security/advisories/new
+Expires: 2027-10-29T00:00:00.000Z
+Preferred-Languages: it, en
+Policy: https://github.com/Ft2801/CieloBuio-Segnalazioni/blob/main/SECURITY.md

@@ -2,7 +2,7 @@
  * Test per rate-limit.ts cleanup e escalation con fake timers
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { checkRateLimit, resetRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 describe("rate-limit cleanup e escalation", () => {
   beforeEach(() => {

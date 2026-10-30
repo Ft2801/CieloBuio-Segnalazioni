@@ -9,6 +9,8 @@ import { db } from "@/lib/db";
 import { getSessionUser, canManageConfiguration } from "@/lib/auth";
 import { nuovoComuneSchema, validate } from "@/lib/validation";
 import { logger } from "@/lib/logger";
+import { normalizzaStringaFacoltativa, leggiBodyOggetto, normalizzaIdNumerico, parseIdIntero } from "@/lib/http";
+import { Prisma } from "@prisma/client";
 
 export async function GET(req: NextRequest) {
   const user = await getSessionUser();
@@ -22,12 +24,9 @@ export async function GET(req: NextRequest) {
 
   const where: Record<string, unknown> = {};
   if (provinciaId) {
-    const provinciaIdNum = Number(provinciaId);
-    if (isNaN(provinciaIdNum)) {
-      return NextResponse.json(
-        { error: "provinciaId non valido" },
-        { status: 400 }
-      );
+    const provinciaIdNum = parseIdIntero(provinciaId);
+    if (provinciaIdNum === null) {
+      return NextResponse.json({ error: "provinciaId non valido" }, { status: 400 });
     }
     where.provinciaId = provinciaIdNum;
   }
@@ -47,7 +46,7 @@ export async function GET(req: NextRequest) {
       orderBy: { nome: "asc" },
       include: {
         provincia: {
-          select: { sigla: true, nome: true, regione: { select: { regione: true } } },
+          select: { sigla: true, nome: true, regione: { select: { regione: true, riferimentoLegge: true } } },
         },
       },
       take: limit,
@@ -63,21 +62,22 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const user = await getSessionUser();
-  if (!user || !canManageConfiguration(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canManageConfiguration(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const provinciaIdNum = body.provinciaId ? Number(body.provinciaId) : null;
-  // Validazione: Number("abc") produce NaN, che non è un ID valido
-  if (provinciaIdNum !== null && isNaN(provinciaIdNum)) {
-    return NextResponse.json({ error: "provinciaId non valido" }, { status: 400 });
+  const body = await leggiBodyOggetto(req);
+  if (!body) {
+    return NextResponse.json({ error: "Corpo della richiesta non valido" }, { status: 400 });
   }
   const normalized = {
     ...body,
-    provinciaId: provinciaIdNum,
-    nomeSindaco: body.nomeSindaco || null,
-    noteAggiornamento: body.noteAggiornamento || null,
+    provinciaId: normalizzaIdNumerico(body.provinciaId),
+    nomeSindaco: normalizzaStringaFacoltativa(body.nomeSindaco),
+    noteAggiornamento: normalizzaStringaFacoltativa(body.noteAggiornamento),
   };
   const validation = validate(nuovoComuneSchema, normalized);
   if (!validation.success) {
@@ -98,10 +98,13 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ comune }, { status: 201 });
   } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return NextResponse.json({ error: "Comune già presente in questa provincia" }, { status: 400 });
+    }
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+      return NextResponse.json({ error: "Provincia non trovata" }, { status: 400 });
+    }
     logger.error({ err: e }, "Errore creazione comune");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }

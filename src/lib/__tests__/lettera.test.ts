@@ -12,7 +12,7 @@ const ctxBase: LetteraContext = {
   comuneNome: "Verdello",
   pecComune: "protocollo@pec.comune.verdello.it",
   indirizzoVia: "Via dei Tigli 5",
-  cap: "24040",
+  cap: "24049",
   provinciaSigla: "BG",
   regione: "LOMBARDIA",
   riferimentoLegge: "L.R. 31/15",
@@ -98,12 +98,12 @@ describe("generaTestoLettera", () => {
   it("contiene l'indirizzo della segnalazione", () => {
     const testo = generaTestoLettera(ctxBase);
     expect(testo).toContain("Via dei Tigli 5");
-    expect(testo).toContain("24040");
+    expect(testo).toContain("24049");
   });
 
   it("contiene il CAP e la provincia", () => {
     const testo = generaTestoLettera(ctxBase);
-    expect(testo).toContain("24040");
+    expect(testo).toContain("24049");
     expect(testo).toContain("BG");
   });
 

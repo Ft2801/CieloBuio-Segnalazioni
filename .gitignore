@@ -54,10 +54,6 @@ server.log
 /storage/
 !/storage/.gitkeep
 
-# Vecchia directory upload pubblica (mantenuta per retrocompatibilità, vuota)
-/public/uploads/*
-!/public/uploads/.gitkeep
-
 # Cache
 /.cache
 /.parcel-cache
@@ -83,6 +79,10 @@ Desktop.ini
 
 # Test coverage
 /coverage
+
+# Report dei test end-to-end
+/playwright-report
+/test-results
 *.lcov
 
 # Prisma
@@ -95,3 +95,6 @@ Desktop.ini
 # File generati temporanei
 /tmp
 /.tmp
+
+# Python
+__pycache__/

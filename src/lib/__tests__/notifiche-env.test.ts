@@ -6,10 +6,11 @@
  * - notificaVolontarioRifiuto: segnalazione con referenteApprovatore null
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { logger } from "@/lib/logger";
 
 const { mockSendMail, mockCreateTransport } = vi.hoisted(() => {
   const sendMail = vi.fn().mockResolvedValue(true);
-  const createTransport = vi.fn(() => ({ sendMail }));
+  const createTransport = vi.fn(() => ({ sendMail, close: vi.fn() }));
   return { mockSendMail: sendMail, mockCreateTransport: createTransport };
 });
 
@@ -24,11 +25,10 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("nodemailer", () => ({
-  default: {
-    createTransport: mockCreateTransport,
-  },
-}));
+vi.mock("nodemailer", () => {
+  const createTransport = mockCreateTransport;
+  return { createTransport, default: { createTransport } };
+});
 
 import { db } from "@/lib/db";
 import { __resetTransporterCacheForTests } from "@/lib/notifiche";
@@ -67,10 +67,8 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
       provinciaId: 1,
       regioneId: 1,
       volontario: { nomeCognome: "Mario", email: "m@t.it" },
-    } as any);
-    vi.mocked(db.user.findMany).mockResolvedValue([
-      { emailOrdinaria: "ref@t.it", email: "ref@t.it" },
-    ] as any);
+    } as never);
+    vi.mocked(db.user.findMany).mockResolvedValue([{ emailOrdinaria: "ref@t.it", email: "ref@t.it" }] as never);
 
     const { notificaReferenteNuovaRevisione } = await import("@/lib/notifiche");
     await notificaReferenteNuovaRevisione("s1");
@@ -80,14 +78,14 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
       expect.objectContaining({
         host: "smtp.pec.it",
         port: 587,
-      })
+      }),
     );
     // Verifica che sendMail sia stato chiamato con from personalizzato
     expect(mockSendMail).toHaveBeenCalledWith(
       expect.objectContaining({
         from: "noreply@cielobuio.it",
         to: "ref@t.it",
-      })
+      }),
     );
   });
 
@@ -103,10 +101,8 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
       provinciaId: 1,
       regioneId: 1,
       volontario: { nomeCognome: "Mario", email: "m@t.it" },
-    } as any);
-    vi.mocked(db.user.findMany).mockResolvedValue([
-      { emailOrdinaria: "ref2@t.it", email: "ref2@t.it" },
-    ] as any);
+    } as never);
+    vi.mocked(db.user.findMany).mockResolvedValue([{ emailOrdinaria: "ref2@t.it", email: "ref2@t.it" }] as never);
 
     const { notificaReferenteNuovaRevisione } = await import("@/lib/notifiche");
     await notificaReferenteNuovaRevisione("s2");
@@ -114,11 +110,11 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
     expect(mockCreateTransport).toHaveBeenCalledWith(
       expect.objectContaining({
         port: 465,
-      })
+      }),
     );
   });
 
-  it("inviaEmail usa PEC_FROM default se non configurato", async () => {
+  it("inviaEmail non invia senza PEC_FROM e registra la mancata consegna", async () => {
     delete process.env.PEC_FROM;
     __resetTransporterCacheForTests();
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
@@ -130,19 +126,20 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
       provinciaId: 1,
       regioneId: 1,
       volontario: { nomeCognome: "Mario", email: "m@t.it" },
-    } as any);
-    vi.mocked(db.user.findMany).mockResolvedValue([
-      { emailOrdinaria: "ref3@t.it", email: "ref3@t.it" },
-    ] as any);
+    } as never);
+    vi.mocked(db.user.findMany).mockResolvedValue([{ emailOrdinaria: "ref3@t.it", email: "ref3@t.it" }] as never);
 
+    const errore = vi.spyOn(logger, "error").mockImplementation(() => undefined as never);
     const { notificaReferenteNuovaRevisione } = await import("@/lib/notifiche");
     await notificaReferenteNuovaRevisione("s3");
 
-    expect(mockSendMail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        from: "no-reply@tuodominio.it",
-      })
+    // Senza mittente configurato nessuna email parte: niente indirizzo di default.
+    expect(mockSendMail).not.toHaveBeenCalled();
+    expect(errore).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "ref3@t.it" }),
+      "PEC_FROM non configurato: notifica email non inviata",
     );
+    vi.restoreAllMocks();
   });
 
   it("notificaReferenteNuovaRevisione: segnalazione con campi null nel subject/text", async () => {
@@ -155,10 +152,8 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
       provinciaId: null,
       regioneId: null,
       volontario: { nomeCognome: null, email: "m@t.it" }, // null
-    } as any);
-    vi.mocked(db.user.findMany).mockResolvedValue([
-      { emailOrdinaria: "ref4@t.it", email: "ref4@t.it" },
-    ] as any);
+    } as never);
+    vi.mocked(db.user.findMany).mockResolvedValue([{ emailOrdinaria: "ref4@t.it", email: "ref4@t.it" }] as never);
 
     const { notificaReferenteNuovaRevisione } = await import("@/lib/notifiche");
     await notificaReferenteNuovaRevisione("s4");
@@ -169,12 +164,34 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
     expect(call.text).toContain("n/d");
   });
 
+  it("notificaReferenteNuovaRevisione: senza NEXT_PUBLIC_BASE_URL indica n/d come piattaforma", async () => {
+    delete process.env.NEXT_PUBLIC_BASE_URL;
+    vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
+      id: "s5",
+      indirizzoVia: "Via 5",
+      comune: { nome: "Comune 5" },
+      provincia: { sigla: "P5" },
+      regione: { regione: "Regione 5" },
+      provinciaId: 1,
+      regioneId: 1,
+      volontario: { nomeCognome: "Volontario 5", email: "v5@t.it" },
+    } as never);
+    vi.mocked(db.user.findMany).mockResolvedValue([{ emailOrdinaria: "ref5@t.it", email: "ref5@t.it" }] as never);
+
+    const { notificaReferenteNuovaRevisione } = await import("@/lib/notifiche");
+    await notificaReferenteNuovaRevisione("s5");
+
+    expect(mockSendMail).toHaveBeenCalled();
+    const call = mockSendMail.mock.calls[0][0];
+    expect(call.text).toContain("Piattaforma: n/d");
+  });
+
   it("notificaVolontarioRifiuto: referenteApprovatore null nel text", async () => {
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
       id: "s5",
       volontario: { nomeCognome: "Mario", email: "m@t.it", emailOrdinaria: null },
       referenteApprovatore: null, // null -> text ha "rifiutata dal referente "
-    } as any);
+    } as never);
 
     const { notificaVolontarioRifiuto } = await import("@/lib/notifiche");
     await notificaVolontarioRifiuto("s5", "nota test");
@@ -191,7 +208,7 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
       id: "s6",
       volontario: { nomeCognome: "Mario", email: null, emailOrdinaria: "mario@ord.it" },
       referenteApprovatore: { nomeCognome: "Ref" },
-    } as any);
+    } as never);
 
     const { notificaVolontarioRifiuto } = await import("@/lib/notifiche");
     await notificaVolontarioRifiuto("s6", "nota");
@@ -199,7 +216,7 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
     expect(mockSendMail).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "mario@ord.it",
-      })
+      }),
     );
   });
 
@@ -213,7 +230,7 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
       provincia: null,
       volontario: { id: "v7", nomeCognome: "Mario", email: "m@t.it", emailOrdinaria: null },
       referenteApprovatore: null,
-    } as any);
+    } as never);
 
     const { notificaPecInviata } = await import("@/lib/notifiche");
     await notificaPecInviata("s7");
@@ -221,7 +238,7 @@ describe("notifiche.ts - rami PEC_SMTP_PORT e PEC_FROM configurati", () => {
     expect(mockSendMail).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "m@t.it",
-      })
+      }),
     );
     const call = mockSendMail.mock.calls[0][0];
     expect(call.subject).toContain("PEC inviata:");

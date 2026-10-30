@@ -17,13 +17,13 @@ vi.mock("@/lib/db", () => ({
 
 // Mock di nodemailer
 const mockSendMail = vi.fn().mockResolvedValue(true);
-vi.mock("nodemailer", () => ({
-  default: {
-    createTransport: vi.fn(() => ({
-      sendMail: mockSendMail,
-    })),
-  },
-}));
+vi.mock("nodemailer", () => {
+  const createTransport = vi.fn(() => ({
+    close: vi.fn(),
+    sendMail: mockSendMail,
+  }));
+  return { createTransport, default: { createTransport } };
+});
 
 import { db } from "@/lib/db";
 
@@ -47,19 +47,21 @@ describe("notifiche.ts - SMTP path", () => {
 
   it("notificaReferenteNuovaRevisione: invia email reale via SMTP", async () => {
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
-      id: "s1", indirizzoVia: "Via 1",
-      comune: { nome: "Verdello" }, provincia: { sigla: "BG" },
+      id: "s1",
+      indirizzoVia: "Via 1",
+      comune: { nome: "Verdello" },
+      provincia: { sigla: "BG" },
       regione: { regione: "LOMBARDIA" },
-      provinciaId: 1, regioneId: 1,
+      provinciaId: 1,
+      regioneId: 1,
       volontario: { nomeCognome: "Mario", email: "m@t.it" },
-    } as any);
-    vi.mocked(db.user.findMany).mockResolvedValue([
-      { emailOrdinaria: "ref@t.it", email: "ref@t.it" },
-    ] as any);
+    } as never);
+    vi.mocked(db.user.findMany).mockResolvedValue([{ emailOrdinaria: "ref@t.it", email: "ref@t.it" }] as never);
 
     const { notificaReferenteNuovaRevisione } = await import("@/lib/notifiche");
     await notificaReferenteNuovaRevisione("s1");
     expect(mockSendMail).toHaveBeenCalled();
+    expect(JSON.stringify(mockSendMail.mock.calls[0][0].to)).toContain("ref@t.it");
   });
 
   it("notificaVolontarioRifiuto: invia email reale via SMTP", async () => {
@@ -67,24 +69,30 @@ describe("notifiche.ts - SMTP path", () => {
       id: "s1",
       volontario: { nomeCognome: "Mario", email: "m@t.it", emailOrdinaria: null },
       referenteApprovatore: { nomeCognome: "Referente" },
-    } as any);
+    } as never);
 
     const { notificaVolontarioRifiuto } = await import("@/lib/notifiche");
-    await notificaVolontarioRifiuto("s1", "nota test");
+    await notificaVolontarioRifiuto("s1", "nota test", "Mario Referente");
+    expect(mockSendMail.mock.calls[0][0].text).toContain("referente Mario Referente.");
     expect(mockSendMail).toHaveBeenCalled();
+    expect(JSON.stringify(mockSendMail.mock.calls[0][0].to)).toContain("m@t.it");
   });
 
   it("notificaPecInviata: invia email reale via SMTP", async () => {
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
-      id: "s1", numeroProtocollo: "P1", indirizzoVia: "Via 1",
+      id: "s1",
+      numeroProtocollo: "P1",
+      indirizzoVia: "Via 1",
       dataInvio: new Date(),
-      comune: { nome: "Verdello" }, provincia: { sigla: "BG" },
+      comune: { nome: "Verdello" },
+      provincia: { sigla: "BG" },
       volontario: { id: "v1", nomeCognome: "Mario", email: "m@t.it", emailOrdinaria: null },
       referenteApprovatore: { id: "r1", nomeCognome: "Referente", email: "r@t.it", emailOrdinaria: null },
-    } as any);
+    } as never);
 
     const { notificaPecInviata } = await import("@/lib/notifiche");
     await notificaPecInviata("s1");
     expect(mockSendMail).toHaveBeenCalled();
+    expect(JSON.stringify(mockSendMail.mock.calls[0][0].to)).toContain("m@t.it");
   });
 });

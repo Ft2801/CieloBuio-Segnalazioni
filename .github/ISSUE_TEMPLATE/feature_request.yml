@@ -1,0 +1,31 @@
+name: Richiesta di funzionalità
+description: Proponi una nuova funzionalità o un miglioramento
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: Problema da risolvere
+      description: Quale esigenza concreta non è coperta oggi?
+    validations:
+      required: true
+  - type: textarea
+    id: proposta
+    attributes:
+      label: Soluzione proposta
+    validations:
+      required: true
+  - type: textarea
+    id: alternative
+    attributes:
+      label: Alternative valutate
+  - type: checkboxes
+    id: impatti
+    attributes:
+      label: Impatti da considerare
+      options:
+        - label: Dati personali o accessi (GDPR, ruoli)
+        - label: Sicurezza (autenticazione, upload, PEC)
+        - label: Accessibilità (contrasto, tastiera, screen reader)
+        - label: Configurazione o deploy (variabili d'ambiente, Docker)

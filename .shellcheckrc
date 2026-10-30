@@ -1,0 +1,6 @@
+# Configurazione di ShellCheck (lint degli script shell, eseguito in CI).
+# Gli script del progetto sono Bash (vedi scripts/deploy.sh).
+shell=bash
+
+# Nessuna risorsa esterna: ogni script deve essere leggibile da solo.
+external-sources=false

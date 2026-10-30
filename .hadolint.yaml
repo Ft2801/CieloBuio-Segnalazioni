@@ -1,0 +1,8 @@
+# Configurazione di hadolint (lint del Dockerfile, eseguito in CI).
+# Soglia: qualunque avviso di livello warning o superiore fa fallire la verifica.
+failure-threshold: warning
+
+# Registri da cui sono ammesse le immagini base (nessun avviso DL3007 per questi).
+trustedRegistries:
+  - docker.io
+  - ghcr.io

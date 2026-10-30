@@ -27,28 +27,50 @@ import { db } from "@/lib/db";
 import { GET, POST } from "@/app/api/config/regioni/route";
 
 const ADMIN_SESSION = {
-  id: "s1", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s1",
+  token: "tok",
+  scadenza: new Date(Date.now() + 10000),
   user: {
-    id: "u1", email: "a@t.it", nomeCognome: "Admin", ruolo: "admin",
-    provinciaId: null, regioneId: null, inizialiProtocollo: "AD",
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true,
+    id: "u1",
+    email: "a@t.it",
+    nomeCognome: "Admin",
+    ruolo: "admin",
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: "AD",
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
+    attivo: true,
   },
 };
 const VOL_SESSION = {
-  id: "s1", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s1",
+  token: "tok",
+  scadenza: new Date(Date.now() + 10000),
   user: {
-    id: "u2", email: "v@t.it", nomeCognome: "Vol", ruolo: "volontario",
-    provinciaId: null, regioneId: null, inizialiProtocollo: "VL",
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true,
+    id: "u2",
+    email: "v@t.it",
+    nomeCognome: "Vol",
+    ruolo: "volontario",
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: "VL",
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
+    attivo: true,
   },
 };
 
 function mockCookiesFor(user: typeof ADMIN_SESSION | null) {
   vi.mocked(cookies).mockResolvedValue({
     get: () => (user ? { value: "tok" } : undefined),
-  } as any);
+  } as never);
   if (user) {
-    vi.mocked(db.sessione.findUnique).mockResolvedValue(user as any);
+    vi.mocked(db.sessione.findUnique).mockResolvedValue(user as never);
   } else {
     vi.mocked(db.sessione.findUnique).mockResolvedValue(null);
   }
@@ -68,7 +90,7 @@ describe("GET /api/config/regioni", () => {
     mockCookiesFor(VOL_SESSION);
     vi.mocked(db.regioneLegge.findMany).mockResolvedValue([
       { id: 1, regione: "LOMBARDIA", riferimentoLegge: "L.R. 31/15" },
-    ] as any);
+    ] as never);
     const res = await GET();
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -80,7 +102,7 @@ describe("GET /api/config/regioni", () => {
     mockCookiesFor(ADMIN_SESSION);
     vi.mocked(db.regioneLegge.findMany).mockResolvedValue([
       { id: 1, regione: "LOMBARDIA", riferimentoLegge: "L.R. 31/15" },
-    ] as any);
+    ] as never);
     const res = await GET();
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -91,21 +113,23 @@ describe("GET /api/config/regioni", () => {
 describe("POST /api/config/regioni", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("ritorna 403 se non autenticato (no cookie -> 403, non 401)", async () => {
-    // POST ha check `!user || !canManageConfiguration(user)` -> 403 per entrambi i casi
+  it("ritorna 401 se non autenticato (nessun cookie)", async () => {
+    // Senza sessione la risposta è 401; con sessione senza permessi è 403.
     mockCookiesFor(null);
     const req = new NextRequest("http://localhost/api/config/regioni", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
     const res = await POST(req);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it("ritorna 403 per non-admin (volontario)", async () => {
     mockCookiesFor(VOL_SESSION);
     const req = new NextRequest("http://localhost/api/config/regioni", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ regione: "X", riferimentoLegge: "Y" }),
     });
     const res = await POST(req);
@@ -115,7 +139,8 @@ describe("POST /api/config/regioni", () => {
   it("ritorna 400 se campi obbligatori mancanti", async () => {
     mockCookiesFor(ADMIN_SESSION);
     const req = new NextRequest("http://localhost/api/config/regioni", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ regione: "" }),
     });
     const res = await POST(req);
@@ -125,7 +150,8 @@ describe("POST /api/config/regioni", () => {
   it("ritorna 400 se PEC ARPA non valida", async () => {
     mockCookiesFor(ADMIN_SESSION);
     const req = new NextRequest("http://localhost/api/config/regioni", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ regione: "X", riferimentoLegge: "Y", pecArpaRegionale: "not-email" }),
     });
     const res = await POST(req);
@@ -135,10 +161,13 @@ describe("POST /api/config/regioni", () => {
   it("crea regione valida ritorna 201", async () => {
     mockCookiesFor(ADMIN_SESSION);
     vi.mocked(db.regioneLegge.create).mockResolvedValue({
-      id: 1, regione: "LOMBARDIA", riferimentoLegge: "L.R. 31/15",
-    } as any);
+      id: 1,
+      regione: "LOMBARDIA",
+      riferimentoLegge: "L.R. 31/15",
+    } as never);
     const req = new NextRequest("http://localhost/api/config/regioni", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ regione: "LOMBARDIA", riferimentoLegge: "L.R. 31/15", pecArpaRegionale: "arpa@pec.it" }),
     });
     const res = await POST(req);
@@ -151,7 +180,8 @@ describe("POST /api/config/regioni", () => {
     mockCookiesFor(ADMIN_SESSION);
     vi.mocked(db.regioneLegge.create).mockRejectedValue(new Error("DB error"));
     const req = new NextRequest("http://localhost/api/config/regioni", {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ regione: "LOMBARDIA", riferimentoLegge: "L.R. 31/15", pecArpaRegionale: "" }),
     });
     const res = await POST(req);

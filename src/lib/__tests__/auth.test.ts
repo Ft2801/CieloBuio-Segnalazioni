@@ -12,44 +12,91 @@ import {
   getVisibilityFilter,
   setSessionCookie,
   clearSessionCookie,
-  SESSION_COOKIE,
   type SessionUser,
 } from "@/lib/auth";
 
 const adminUser: SessionUser = {
-  id: "admin-1", email: "admin@test.it", nomeCognome: "Admin Test",
-  ruolo: "admin", provinciaId: null, regioneId: null,
-  inizialiProtocollo: "AT", pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
+  id: "admin-1",
+  email: "admin@test.it",
+  nomeCognome: "Admin Test",
+  ruolo: "admin",
+  provinciaId: null,
+  regioneId: null,
+  inizialiProtocollo: "AT",
+  pec: null,
+  emailOrdinaria: null,
+  indirizzo: null,
+  firma: null,
 };
 
 const volontarioUser: SessionUser = {
-  id: "vol-1", email: "vol@test.it", nomeCognome: "Volontario Test",
-  ruolo: "volontario", provinciaId: null, regioneId: null,
-  inizialiProtocollo: "VT", pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
+  id: "vol-1",
+  email: "vol@test.it",
+  nomeCognome: "Volontario Test",
+  ruolo: "volontario",
+  provinciaId: null,
+  regioneId: null,
+  inizialiProtocollo: "VT",
+  pec: null,
+  emailOrdinaria: null,
+  indirizzo: null,
+  firma: null,
 };
 
 const refProvincialeUser: SessionUser = {
-  id: "ref-1", email: "ref@test.it", nomeCognome: "Referente Test",
-  ruolo: "referente_provinciale", provinciaId: 5, regioneId: null,
-  inizialiProtocollo: "RT", pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
+  id: "ref-1",
+  email: "ref@test.it",
+  nomeCognome: "Referente Test",
+  ruolo: "referente_provinciale",
+  provinciaId: 5,
+  regioneId: null,
+  inizialiProtocollo: "RT",
+  pec: null,
+  emailOrdinaria: null,
+  indirizzo: null,
+  firma: null,
 };
 
 const refRegionaleUser: SessionUser = {
-  id: "ref-2", email: "refr@test.it", nomeCognome: "Referente Regionale",
-  ruolo: "referente_regionale", provinciaId: null, regioneId: 3,
-  inizialiProtocollo: "RR", pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
+  id: "ref-2",
+  email: "refr@test.it",
+  nomeCognome: "Referente Regionale",
+  ruolo: "referente_regionale",
+  provinciaId: null,
+  regioneId: 3,
+  inizialiProtocollo: "RR",
+  pec: null,
+  emailOrdinaria: null,
+  indirizzo: null,
+  firma: null,
 };
 
 const refSenzaTerritorio: SessionUser = {
-  id: "ref-3", email: "refnull@test.it", nomeCognome: "Referente Null",
-  ruolo: "referente_provinciale", provinciaId: null, regioneId: null,
-  inizialiProtocollo: "RN", pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
+  id: "ref-3",
+  email: "refnull@test.it",
+  nomeCognome: "Referente Null",
+  ruolo: "referente_provinciale",
+  provinciaId: null,
+  regioneId: null,
+  inizialiProtocollo: "RN",
+  pec: null,
+  emailOrdinaria: null,
+  indirizzo: null,
+  firma: null,
 };
 
 const refRegionaleSenzaTerritorio: SessionUser = {
-  id: "ref-4", email: "refrnull@test.it", nomeCognome: "Referente Reg Null",
-  ruolo: "referente_regionale", provinciaId: null, regioneId: null,
-  inizialiProtocollo: "RN", pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
+  id: "ref-4",
+  email: "refrnull@test.it",
+  nomeCognome: "Referente Reg Null",
+  ruolo: "referente_regionale",
+  provinciaId: null,
+  regioneId: null,
+  inizialiProtocollo: "RN",
+  pec: null,
+  emailOrdinaria: null,
+  indirizzo: null,
+  firma: null,
 };
 
 describe("canViewAllSegnalazioni", () => {
@@ -66,7 +113,7 @@ describe("canReviewSegnalazioni", () => {
     expect(canReviewSegnalazioni(refProvincialeUser)).toBe(true);
     expect(canReviewSegnalazioni(refRegionaleUser)).toBe(true);
   });
-  it("volontario non puo revisionare", () => {
+  it("volontario non può revisionare", () => {
     expect(canReviewSegnalazioni(volontarioUser)).toBe(false);
   });
 });
@@ -76,7 +123,7 @@ describe("canSendPec", () => {
     expect(canSendPec(adminUser)).toBe(true);
     expect(canSendPec(refProvincialeUser)).toBe(true);
   });
-  it("volontario non puo inviare PEC", () => {
+  it("volontario non può inviare PEC", () => {
     expect(canSendPec(volontarioUser)).toBe(false);
   });
 });
@@ -209,11 +256,6 @@ describe("getVisibilityFilter", () => {
 });
 
 describe("Session cookie helpers", () => {
-  it("SESSION_COOKIE constant", () => {
-    // In ambienti di test (NODE_ENV non production) è "cb_session"
-    expect(SESSION_COOKIE).toBe("cb_session");
-  });
-
   it("setSessionCookie contiene HttpOnly e SameSite=Strict", () => {
     const cookie = setSessionCookie("test-token");
     expect(cookie).toContain("cb_session=test-token");

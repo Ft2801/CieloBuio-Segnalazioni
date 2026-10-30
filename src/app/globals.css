@@ -6,8 +6,9 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans:
+    var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -44,25 +45,24 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Tema CieloBuio: product register, restrained strategy.
-   Colore primario: indaco profondo (richiama il cielo notturno senza
-   cadere nel cliché del "dark + accent verde acido"). Neutri con leggera
-   tinta indaco per coesione col brand. Tutte le superfici sono leggibili
-   ad alta densità (dashboard amministrativa) e funzionano in light mode. */
+/* Tema CieloBuio: interfaccia sobria e densa, pensata per una dashboard
+   amministrativa. Colore primario: indaco profondo, che richiama il cielo
+   notturno. Neutri con leggera tinta indaco per coesione col brand. Tutte
+   le superfici sono leggibili ad alta densità nel tema chiaro. */
 :root {
   --radius: 0.5rem;
 
   /* Neutri con leggera tinta indaco (chroma 0.008, hue 260) */
   --background: oklch(0.985 0.008 260);
-  --foreground: oklch(0.20 0.02 260);
+  --foreground: oklch(0.2 0.02 260);
 
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.20 0.02 260);
+  --card-foreground: oklch(0.2 0.02 260);
 
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.20 0.02 260);
+  --popover-foreground: oklch(0.2 0.02 260);
 
-  /* Primario: indaco scuro professionale, non il default "AI blue" #3B82F6 */
+  /* Primario: indaco scuro, diverso dal blu predefinito di molte librerie (#3B82F6) */
   --primary: oklch(0.42 0.13 264);
   --primary-foreground: oklch(0.98 0.005 260);
 
@@ -70,27 +70,27 @@
   --secondary-foreground: oklch(0.25 0.02 260);
 
   --muted: oklch(0.95 0.012 260);
-  --muted-foreground: oklch(0.50 0.02 260);
+  --muted-foreground: oklch(0.42 0.02 260);
 
   --accent: oklch(0.93 0.02 264);
   --accent-foreground: oklch(0.25 0.02 260);
 
   /* Semantici */
-  --destructive: oklch(0.55 0.22 25);
+  --destructive: oklch(0.52 0.21 25);
   --destructive-foreground: oklch(0.98 0.005 260);
   --border: oklch(0.88 0.01 260);
-  --input: oklch(0.92 0.012 260);
+  --input: oklch(0.6 0.02 260);
   --ring: oklch(0.55 0.13 264);
 
   --chart-1: oklch(0.55 0.18 264);
   --chart-2: oklch(0.65 0.15 175);
-  --chart-3: oklch(0.60 0.18 50);
-  --chart-4: oklch(0.55 0.20 350);
+  --chart-3: oklch(0.6 0.18 50);
+  --chart-4: oklch(0.55 0.2 350);
   --chart-5: oklch(0.65 0.16 145);
 
   /* Sidebar: layer leggermente più scuro per gerarchia visiva */
   --sidebar: oklch(0.97 0.01 260);
-  --sidebar-foreground: oklch(0.20 0.02 260);
+  --sidebar-foreground: oklch(0.2 0.02 260);
   --sidebar-primary: oklch(0.42 0.13 264);
   --sidebar-primary-foreground: oklch(0.98 0.005 260);
   --sidebar-accent: oklch(0.93 0.02 264);
@@ -99,62 +99,75 @@
   --sidebar-ring: oklch(0.55 0.13 264);
 }
 
-/* Dark mode: layer di elevazione via luminosità, non shadow.
-   Accento leggermente desaturato per non vibrare sullo sfondo scuro. */
+/* Tema scuro: stessi ruoli semantici del tema chiaro, con superfici indaco
+   profonde e primario schiarito per mantenere contrasti WCAG AA (testo 4.5:1,
+   componenti e focus 3:1). Attivato dalla classe "dark" su <html>. */
 .dark {
-  --background: oklch(0.16 0.015 264);
-  --foreground: oklch(0.93 0.008 260);
+  --background: oklch(0.16 0.022 264);
+  --foreground: oklch(0.96 0.008 260);
 
-  --card: oklch(0.20 0.015 264);
-  --card-foreground: oklch(0.93 0.008 260);
+  --card: oklch(0.205 0.024 264);
+  --card-foreground: oklch(0.96 0.008 260);
 
-  --popover: oklch(0.22 0.015 264);
-  --popover-foreground: oklch(0.93 0.008 260);
+  --popover: oklch(0.225 0.024 264);
+  --popover-foreground: oklch(0.96 0.008 260);
 
-  --primary: oklch(0.68 0.12 264);
-  --primary-foreground: oklch(0.15 0.02 264);
+  --primary: oklch(0.72 0.12 264);
+  --primary-foreground: oklch(0.16 0.022 264);
 
-  --secondary: oklch(0.25 0.015 264);
-  --secondary-foreground: oklch(0.93 0.008 260);
+  --secondary: oklch(0.28 0.024 264);
+  --secondary-foreground: oklch(0.96 0.008 260);
 
-  --muted: oklch(0.24 0.015 264);
-  --muted-foreground: oklch(0.70 0.012 260);
+  --muted: oklch(0.27 0.022 264);
+  --muted-foreground: oklch(0.76 0.02 260);
 
-  --accent: oklch(0.30 0.02 264);
-  --accent-foreground: oklch(0.93 0.008 260);
+  --accent: oklch(0.3 0.04 264);
+  --accent-foreground: oklch(0.96 0.008 260);
 
-  --destructive: oklch(0.65 0.20 25);
-  --destructive-foreground: oklch(0.98 0.005 260);
-  --border: oklch(0.30 0.015 264);
-  --input: oklch(0.27 0.015 264);
-  --ring: oklch(0.60 0.13 264);
+  --destructive: oklch(0.68 0.18 25);
+  --destructive-foreground: oklch(0.16 0.022 264);
+  --border: oklch(0.34 0.024 264);
+  --input: oklch(0.58 0.024 264);
+  --ring: oklch(0.72 0.12 264);
 
-  --chart-1: oklch(0.65 0.16 264);
-  --chart-2: oklch(0.70 0.14 175);
-  --chart-3: oklch(0.70 0.16 50);
-  --chart-4: oklch(0.65 0.18 350);
-  --chart-5: oklch(0.70 0.15 145);
+  --chart-1: oklch(0.72 0.12 264);
+  --chart-2: oklch(0.76 0.12 175);
+  --chart-3: oklch(0.76 0.13 60);
+  --chart-4: oklch(0.72 0.17 350);
+  --chart-5: oklch(0.76 0.15 145);
 
-  --sidebar: oklch(0.18 0.015 264);
-  --sidebar-foreground: oklch(0.93 0.008 260);
-  --sidebar-primary: oklch(0.68 0.12 264);
-  --sidebar-primary-foreground: oklch(0.15 0.02 264);
-  --sidebar-accent: oklch(0.28 0.02 264);
-  --sidebar-accent-foreground: oklch(0.93 0.008 260);
-  --sidebar-border: oklch(0.28 0.015 264);
-  --sidebar-ring: oklch(0.60 0.13 264);
+  --sidebar: oklch(0.185 0.024 264);
+  --sidebar-foreground: oklch(0.96 0.008 260);
+  --sidebar-primary: oklch(0.72 0.12 264);
+  --sidebar-primary-foreground: oklch(0.16 0.022 264);
+  --sidebar-accent: oklch(0.3 0.04 264);
+  --sidebar-accent-foreground: oklch(0.96 0.008 260);
+  --sidebar-border: oklch(0.34 0.024 264);
+  --sidebar-ring: oklch(0.72 0.12 264);
 }
 
 @layer base {
+  :root {
+    color-scheme: light;
+  }
+  .dark {
+    color-scheme: dark;
+  }
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
   body {
     @apply bg-background text-foreground;
-    font-feature-settings: "ss01", "tnum";
+    font-family: var(--font-sans);
+    font-feature-settings: "tnum";
+    line-height: 1.5;
   }
 
-  /* Focus ring visibile per accessibilità (sezione 6.2 del web-design-skill) */
+  /* Focus ring visibile da tastiera per accessibilità */
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
@@ -176,8 +189,59 @@
     background: var(--muted-foreground);
   }
 
-  /* text-wrap per evitare orfani/widow (sezione 3.7) */
-  h1, h2, h3 {
+  /* Rispetto della preferenza di movimento ridotto (WCAG 2.3.3, animazioni opzionali). */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* Target tattili minimi: su dispositivi a puntatore grossolano (touch) i
+     controlli interattivi raggiungono 44 x 44 px (raccomandazione Apple HIG
+     44 pt, Material 48 dp, WCAG 2.5.5). Su desktop restano compatti. */
+  @media (pointer: coarse) {
+    button,
+    [role="button"],
+    [role="switch"],
+    [role="checkbox"],
+    [role="tab"],
+    select,
+    input:not([type="hidden"]),
+    textarea {
+      min-height: 44px;
+    }
+    button,
+    [role="button"] {
+      min-width: 44px;
+    }
+  }
+
+  /* Link di salto al contenuto principale, visibile solo al focus da tastiera. */
+  .skip-link {
+    position: absolute;
+    left: 1rem;
+    top: -100px;
+    z-index: 100;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-md);
+    background: var(--primary);
+    color: var(--primary-foreground);
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .skip-link:focus {
+    top: 0.75rem;
+  }
+
+  /* text-wrap per evitare righe orfane o singole parole isolate */
+  h1,
+  h2,
+  h3 {
     text-wrap: balance;
   }
   p {

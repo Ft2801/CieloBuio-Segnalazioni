@@ -11,7 +11,7 @@ export function AutoreLink({ className = "" }: { className?: string }) {
       href="https://ft2801.github.io/Portfolio"
       target="_blank"
       rel="noopener noreferrer"
-      className={`text-primary underline underline-offset-2 decoration-2 hover:decoration-4 transition-all font-medium ${className}`}
+      className={`inline-flex min-h-6 items-center text-primary underline underline-offset-2 decoration-2 hover:decoration-4 transition-all font-medium ${className}`}
     >
       Fabio Tempera
     </a>

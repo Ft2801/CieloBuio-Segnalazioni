@@ -6,8 +6,8 @@
  * bene in jsdom, quindi ci limitiamo a testare il rendering del provider
  * e l'integrazione con useToast senza verificare il DOM del toast animato.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
 import React from "react";
 
 // Mock useToast per controllare i toast renderizzati
@@ -30,7 +30,7 @@ describe("Toaster", () => {
       toasts: [],
       toast: vi.fn(),
       dismiss: vi.fn(),
-    } as any);
+    } as never);
     const { container } = render(<Toaster />);
     expect(container).toBeInTheDocument();
   });
@@ -40,47 +40,40 @@ describe("Toaster", () => {
       toasts: [],
       toast: vi.fn(),
       dismiss: vi.fn(),
-    } as any);
+    } as never);
     render(<Toaster />);
     expect(useToast).toHaveBeenCalled();
   });
 
   it("renderizza con toast nella lista (non crasha)", () => {
     vi.mocked(useToast).mockReturnValue({
-      toasts: [
-        { id: "1", title: "Test", description: "Desc", open: true },
-      ],
+      toasts: [{ id: "1", title: "Test", description: "Desc", open: true }],
       toast: vi.fn(),
       dismiss: vi.fn(),
-    } as any);
-    // Non verifichiamo il DOM perché Radix Toast ha animazioni in jsdom
-    // Verifichiamo solo che non crashi
-    const { container } = render(<Toaster />);
-    expect(container).toBeInTheDocument();
+    } as never);
+    render(<Toaster />);
+    expect(screen.getByText("Test")).toBeInTheDocument();
+    expect(screen.getByText("Desc")).toBeInTheDocument();
   });
 
   it("renderizza con toast che ha solo title (description undefined)", () => {
     vi.mocked(useToast).mockReturnValue({
-      toasts: [
-        { id: "1", title: "Solo titolo", open: true },
-      ],
+      toasts: [{ id: "1", title: "Solo titolo", open: true }],
       toast: vi.fn(),
       dismiss: vi.fn(),
-    } as any);
-    const { container } = render(<Toaster />);
-    expect(container).toBeInTheDocument();
+    } as never);
+    render(<Toaster />);
+    expect(screen.getByText("Solo titolo")).toBeInTheDocument();
   });
 
   it("renderizza con toast che ha solo description (title undefined)", () => {
     vi.mocked(useToast).mockReturnValue({
-      toasts: [
-        { id: "1", description: "Solo desc", open: true },
-      ],
+      toasts: [{ id: "1", description: "Solo desc", open: true }],
       toast: vi.fn(),
       dismiss: vi.fn(),
-    } as any);
-    const { container } = render(<Toaster />);
-    expect(container).toBeInTheDocument();
+    } as never);
+    render(<Toaster />);
+    expect(screen.getByText("Solo desc")).toBeInTheDocument();
   });
 
   it("renderizza con toast che ha action", () => {
@@ -95,8 +88,9 @@ describe("Toaster", () => {
       ],
       toast: vi.fn(),
       dismiss: vi.fn(),
-    } as any);
-    const { container } = render(<Toaster />);
-    expect(container).toBeInTheDocument();
+    } as never);
+    render(<Toaster />);
+    expect(screen.getByText("Con action")).toBeInTheDocument();
+    expect(screen.getByTestId("action")).toBeInTheDocument();
   });
 });

@@ -7,7 +7,7 @@
  * (3), checkbox problemi (4), nota "altro" condizionale, personalizzazione
  * invio (destinatario, ARPA, CC, oggetto, testo introduttivo, mittente
  * visibile), allegati (upload immagine, upload PDF, validazione dimensione
- * 10MB, limite 4 allegati, eliminazione con confirm, errori server/rete,
+ * 10MB, limite 4 allegati, eliminazione con dialog di conferma, errori server/rete,
  * blocco demo), GPS (successo, errore, non disponibile), submit (POST nuovo
  * con esci true/false, PUT modifica, validazione indirizzo vuoto, errore
  * server, errore rete, risposta JSON non valida, demo mode), pulsanti
@@ -16,7 +16,7 @@
  * Autore: Fabio Tempera (2026)
  */
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SessionUser, Segnalazione } from "@/lib/types";
 import { FormSegnalazione } from "@/components/app/form-segnalazione";
@@ -57,10 +57,6 @@ vi.mock("@/lib/demo-mode", () => ({
   guardDemoReadOnly: (u: unknown) => guardDemoMock(u),
   DEMO_READONLY_MESSAGE: "demo readonly",
 }));
-
-// window.confirm stub (usato da eliminaAllegato)
-const confirmSpy = vi.fn();
-vi.stubGlobal("confirm", confirmSpy);
 
 // fetch globale: ogni test configura mockImplementation o mockResolvedValueOnce.
 const mockFetch = vi.fn();
@@ -211,12 +207,14 @@ function invalidJsonResponse(): Response {
 // - POST/PUT /api/segnalazioni -> salvataggio
 // - POST /api/upload -> upload allegato
 // - DELETE /api/allegati?id= -> eliminazione allegato
-function configuraFetch(opts: {
-  comuni?: unknown[];
-  segnalazione?: Segnalazione | null;
-  segnalazionePrecedente?: Segnalazione | null;
-  uploadAllegato?: unknown;
-} = {}) {
+function configuraFetch(
+  opts: {
+    comuni?: unknown[];
+    segnalazione?: Segnalazione | null;
+    segnalazionePrecedente?: Segnalazione | null;
+    uploadAllegato?: unknown;
+  } = {},
+) {
   const comuni = opts.comuni ?? [creaComune()];
   const segnalazione = opts.segnalazione ?? null;
   const segnalazionePrecedente = opts.segnalazionePrecedente ?? null;
@@ -228,9 +226,8 @@ function configuraFetch(opts: {
     nomeOriginale: "file.jpg",
     createdAt: "2026-01-01T00:00:00.000Z",
   };
-  mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+  mockFetch.mockImplementation(async (url: string | URL, _init?: RequestInit) => {
     const u = typeof url === "string" ? url : url.toString();
-    const method = init?.method ?? "GET";
     if (u.startsWith("/api/config/comuni")) {
       return okResponse({ comuni });
     }
@@ -256,24 +253,51 @@ function configuraFetch(opts: {
 }
 
 // Renderizza il componente con props di default.
-function renderForm(props: Partial<{
-  user: SessionUser;
-  segnalazioneId: string | null;
-  segnalazionePrecedenteId: string | null;
-  onBack: () => void;
-  onSaved: (id: string) => void;
-}> = {}) {
+function renderForm(
+  props: Partial<{
+    user: SessionUser;
+    segnalazioneId: string | null;
+    segnalazionePrecedenteId: string | null;
+    onBack: () => void;
+    onSaved: (id: string) => void;
+  }> = {},
+) {
   const onBack = props.onBack ?? vi.fn();
   const onSaved = props.onSaved ?? vi.fn();
-  return render(
+  const risultato = render(
     <FormSegnalazione
       user={props.user ?? creaUser()}
       segnalazioneId={props.segnalazioneId ?? null}
       segnalazionePrecedenteId={props.segnalazionePrecedenteId ?? null}
       onBack={onBack}
       onSaved={onSaved}
-    />
+    />,
   );
+  // La sezione PEC avanzata è chiusa di default: nei test di rendering la si apre.
+  apriPec();
+  return risultato;
+}
+
+/** Il referente vede la sezione PEC (il volontario no). */
+function renderFormReferente(props: Parameters<typeof renderForm>[0] = {}) {
+  return renderForm({ user: creaUser({ ruolo: "referente_provinciale", provinciaId: 1 }), ...props });
+}
+
+/** Porta il form sul passo indicato dalla barra dei passi. */
+const ETICHETTE_PASSO = {
+  Luogo: /Luogo/,
+  "Non conformità": /Non conformità/,
+  "Allegati e invio": /Allegati e invio/,
+} as const;
+
+function vaiAlPasso(nome: keyof typeof ETICHETTE_PASSO) {
+  fireEvent.click(screen.getByRole("button", { name: ETICHETTE_PASSO[nome] }));
+}
+
+/** Apre il dettaglio <details> della PEC avanzata, se presente. */
+function apriPec() {
+  const dettagli = document.querySelector("details");
+  if (dettagli) dettagli.open = true;
 }
 
 // -----------------------------------------------------------------------------
@@ -283,7 +307,6 @@ function renderForm(props: Partial<{
 beforeEach(() => {
   mockFetch.mockReset();
   toastSpy.mockReset();
-  confirmSpy.mockReset();
   isDemoMock.mockReset();
   isDemoMock.mockReturnValue(false);
   guardDemoMock.mockReset();
@@ -302,8 +325,9 @@ afterEach(() => {
 // -----------------------------------------------------------------------------
 
 describe("FormSegnalazione - caricamento e titolo", () => {
-  it("mostra 'Nuova segnalazione' quando segnalazioneId non è fornito", () => {
+  it("mostra 'Nuova segnalazione' quando segnalazioneId non è fornito", async () => {
     renderForm();
+    await act(async () => {});
     expect(screen.getByRole("heading", { name: "Nuova segnalazione" })).toBeInTheDocument();
   });
 
@@ -329,19 +353,23 @@ describe("FormSegnalazione - caricamento e titolo", () => {
     renderForm();
     // Attende che eventuali fetch iniziali (comuni) vengano eseguite.
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith("/api/config/comuni");
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/config/comuni",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
     });
     // Nessuna chiamata a /api/segnalazioni/[id]
-    const segCall = mockFetch.mock.calls.find((c) =>
-      typeof c[0] === "string" && c[0].startsWith("/api/segnalazioni/")
-    );
+    const segCall = mockFetch.mock.calls.find((c) => typeof c[0] === "string" && c[0].startsWith("/api/segnalazioni/"));
     expect(segCall).toBeUndefined();
   });
 
   it("effettua GET /api/config/comuni al montaggio (debounce iniziale)", async () => {
     renderForm();
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith("/api/config/comuni");
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/config/comuni",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
     });
   });
 
@@ -359,15 +387,15 @@ describe("FormSegnalazione - caricamento e titolo", () => {
       mittenteVisibile: false,
     });
     configuraFetch({ segnalazione: seg });
-    renderForm({ segnalazioneId: "s1" });
+    renderFormReferente({ segnalazioneId: "s1" });
     await waitFor(() => {
-      expect((screen.getByDisplayValue("Via Precaricata 5") as HTMLInputElement)).toBeInTheDocument();
+      expect(screen.getByDisplayValue("Via Precaricata 5") as HTMLInputElement).toBeInTheDocument();
     });
-    expect((screen.getByDisplayValue("Bar Test") as HTMLInputElement)).toBeInTheDocument();
-    expect((screen.getByDisplayValue("00100") as HTMLInputElement)).toBeInTheDocument();
-    expect((screen.getByDisplayValue("Descrizione test") as HTMLTextAreaElement)).toBeInTheDocument();
-    expect((screen.getByDisplayValue("Sindaco Test") as HTMLInputElement)).toBeInTheDocument();
-    expect((screen.getByDisplayValue("Oggetto precompilato") as HTMLInputElement)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Bar Test") as HTMLInputElement).toBeInTheDocument();
+    expect(screen.getByDisplayValue("00100") as HTMLInputElement).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Descrizione test") as HTMLTextAreaElement).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Sindaco Test") as HTMLInputElement).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Oggetto precompilato") as HTMLInputElement).toBeInTheDocument();
     // mittenteVisibile false -> "referente CieloBuio"
     expect(screen.getByText(/Mittente: referente CieloBuio/)).toBeInTheDocument();
   });
@@ -386,7 +414,7 @@ describe("FormSegnalazione - caricamento e titolo", () => {
     });
   });
 
-  it("mostra 'Caricamento…' durante il fetch iniziale della segnalazione", () => {
+  it("mostra 'Caricamento…' durante il fetch iniziale della segnalazione", async () => {
     mockFetch.mockImplementation(async (url: string | URL) => {
       const u = typeof url === "string" ? url : url.toString();
       if (u.startsWith("/api/config/comuni")) return okResponse({ comuni: [] });
@@ -395,6 +423,7 @@ describe("FormSegnalazione - caricamento e titolo", () => {
       return okResponse({});
     });
     renderForm({ segnalazioneId: "s-loading" });
+    await act(async () => {});
     expect(screen.getByText("Caricamento…")).toBeInTheDocument();
   });
 });
@@ -426,6 +455,21 @@ describe("FormSegnalazione - pulsanti navigazione", () => {
 // -----------------------------------------------------------------------------
 
 describe("FormSegnalazione - ricerca comune", () => {
+  it("rende vuota la lista se l'API dei Comuni risponde con errore HTTP", async () => {
+    instradaFetch({
+      "/api/config/comuni": () => Promise.resolve(errorResponse(503, "Temporaneamente non disponibile")),
+    });
+    renderForm();
+    await waitFor(() =>
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/config/comuni",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+    await act(async () => {});
+    expect(screen.getByText(/Nessun comune/i)).toBeInTheDocument();
+  });
+
   it("mostra 'Nessun comune' quando la lista è vuota", async () => {
     configuraFetch({ comuni: [] });
     renderForm();
@@ -472,16 +516,23 @@ describe("FormSegnalazione - ricerca comune", () => {
     configuraFetch({ comuni: [] });
     renderForm();
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith("/api/config/comuni");
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/config/comuni",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
     });
     // Digita nel campo di ricerca comune (placeholder "Cerca comune...")
     await user.type(screen.getByPlaceholderText(/Cerca comune/i), "Roma");
     // Attende che il debounce (300ms) faccia partire la fetch con la search.
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(
-        `/api/config/comuni?search=${encodeURIComponent("Roma")}`
-      );
-    }, { timeout: 2000 });
+    await waitFor(
+      () => {
+        expect(mockFetch).toHaveBeenCalledWith(
+          `/api/config/comuni?search=${encodeURIComponent("Roma")}`,
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        );
+      },
+      { timeout: 2000 },
+    );
   });
 
   it("seleziona un comune con click e popola comuneSelezionato", async () => {
@@ -513,7 +564,7 @@ describe("FormSegnalazione - ricerca comune", () => {
     });
     await user.click(screen.getByText("Milano"));
     await waitFor(() => {
-      expect((screen.getByDisplayValue("20121") as HTMLInputElement)).toBeInTheDocument();
+      expect(screen.getByDisplayValue("20121") as HTMLInputElement).toBeInTheDocument();
     });
   });
 
@@ -530,57 +581,41 @@ describe("FormSegnalazione - ricerca comune", () => {
     await user.click(screen.getByText("Milano"));
     // Il CAP non viene sovrascritto dal comune.
     await waitFor(() => {
-      expect((screen.getByDisplayValue("99999") as HTMLInputElement)).toBeInTheDocument();
+      expect(screen.getByDisplayValue("99999") as HTMLInputElement).toBeInTheDocument();
     });
   });
 
   it("selezionare un comune precompila destinatarioNome con 'Sindaco ...'", async () => {
     const user = userEvent.setup();
     configuraFetch({ comuni: [creaComune({ nomeSindaco: "Giuseppe Sala" })] });
-    renderForm();
+    renderFormReferente();
     await waitFor(() => {
       expect(screen.getByText("Milano")).toBeInTheDocument();
     });
     await user.click(screen.getByText("Milano"));
     await waitFor(() => {
-      expect((screen.getByDisplayValue("Sindaco Giuseppe Sala") as HTMLInputElement)).toBeInTheDocument();
+      expect(screen.getByDisplayValue("Sindaco Giuseppe Sala") as HTMLInputElement).toBeInTheDocument();
     });
   });
 
   it("selezionare un comune precompila oggettoPec e testoIntroduttivoPec se vuoti", async () => {
     const user = userEvent.setup();
     configuraFetch({ comuni: [creaComune()] });
-    renderForm();
+    renderFormReferente();
     await waitFor(() => {
       expect(screen.getByText("Milano")).toBeInTheDocument();
     });
     await user.click(screen.getByText("Milano"));
     await waitFor(() => {
       expect(
-        (screen.getByDisplayValue(/Segnalazione impianto di illuminazione/i) as HTMLInputElement)
+        screen.getByDisplayValue(/Segnalazione impianto di illuminazione/i) as HTMLInputElement,
       ).toBeInTheDocument();
     });
-    expect(
-      (screen.getByDisplayValue(/Si segnala la presenza/i) as HTMLTextAreaElement)
-    ).toBeInTheDocument();
-  });
-
-  it("non mostra il box 'Comune selezionato' se il comune non è in lista", async () => {
-    // comuneId impostato ma comune non presente in lista (es. nuova lista dopo ricerca vuota).
-    configuraFetch({ comuni: [] });
-    renderForm();
-    await waitFor(() => {
-      expect(screen.getByText(/Nessun comune/i)).toBeInTheDocument();
-    });
-    // Il box info (con "Riferimento legge:" e "PEC Comune:") non è visibile.
-    expect(screen.queryByText(/Riferimento legge:/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/PEC Comune:/i)).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue(/Si segnala la presenza/i) as HTMLTextAreaElement).toBeInTheDocument();
   });
 
   it("limita la visualizzazione a 30 comuni (slice)", async () => {
-    const lista = Array.from({ length: 35 }, (_, i) =>
-      creaComune({ id: i + 1, nome: `Comune${i}` })
-    );
+    const lista = Array.from({ length: 35 }, (_, i) => creaComune({ id: i + 1, nome: `Comune${i}` }));
     configuraFetch({ comuni: lista });
     renderForm();
     await waitFor(() => {
@@ -589,6 +624,93 @@ describe("FormSegnalazione - ricerca comune", () => {
     // I primi 30 comuni sono visibili, il 31° (indice 30) no.
     expect(screen.getByText("Comune29")).toBeInTheDocument();
     expect(screen.queryByText("Comune30")).not.toBeInTheDocument();
+  });
+
+  it("aggiorna CAP, destinatario e oggetto quando cambia il Comune precompilato", async () => {
+    const user = userEvent.setup();
+    configuraFetch({
+      comuni: [creaComune(), creaComune({ id: 2, nome: "Monza", cap: "20900", nomeSindaco: "Luca Bianchi" })],
+    });
+    renderFormReferente();
+    await user.click(await screen.findByText("Milano"));
+    expect(screen.getByLabelText("CAP")).toHaveValue("20121");
+    expect(screen.getByLabelText("Destinatario")).toHaveValue("Sindaco Giuseppe Sala");
+    await user.click(screen.getByText("Monza"));
+    expect(screen.getByLabelText("CAP")).toHaveValue("20900");
+    expect(screen.getByLabelText("Destinatario")).toHaveValue("Sindaco Luca Bianchi");
+    expect(screen.getByLabelText("Oggetto PEC")).toHaveValue(
+      "Segnalazione impianto di illuminazione non conforme - Monza (MI)",
+    );
+  });
+
+  it("non sovrascrive CAP e dati PEC scritti a mano quando cambia il Comune", async () => {
+    const user = userEvent.setup();
+    configuraFetch({
+      comuni: [
+        creaComune({ nomeSindaco: null }),
+        creaComune({ id: 2, nome: "Monza", cap: "20900", nomeSindaco: "Luca Bianchi" }),
+      ],
+    });
+    renderFormReferente();
+    await user.click(await screen.findByText("Milano"));
+    expect(screen.getByLabelText("Destinatario")).toHaveValue("Comune di Milano");
+    fireEvent.change(screen.getByLabelText("CAP"), { target: { value: "99999" } });
+    fireEvent.change(screen.getByLabelText("Destinatario"), { target: { value: "Ufficio protocollo" } });
+    fireEvent.change(screen.getByLabelText("Oggetto PEC"), { target: { value: "Oggetto personalizzato" } });
+    await user.click(screen.getByText("Monza"));
+    expect(screen.getByLabelText("CAP")).toHaveValue("99999");
+    expect(screen.getByLabelText("Destinatario")).toHaveValue("Ufficio protocollo");
+    expect(screen.getByLabelText("Oggetto PEC")).toHaveValue("Oggetto personalizzato");
+  });
+
+  it("un errore tardivo di una ricerca annullata non svuota i Comuni più recenti", async () => {
+    const user = userEvent.setup();
+    let rifiutaMilano: (errore: Error) => void = () => undefined;
+    const milanoInAttesa = new Promise<Response>((_resolve, reject) => {
+      rifiutaMilano = reject;
+    });
+    instradaFetch({
+      "/api/config/comuni?search=Mi": () => milanoInAttesa,
+      "/api/config/comuni?search=Mo": () =>
+        Promise.resolve(okResponse({ comuni: [creaComune({ id: 2, nome: "Monza" })] })),
+    });
+    renderForm();
+    const cerca = screen.getByPlaceholderText(/Cerca comune/i);
+    await user.type(cerca, "Mi");
+    await waitFor(() => expect(mockFetch.mock.calls.some((c) => c[0] === "/api/config/comuni?search=Mi")).toBe(true));
+    await user.clear(cerca);
+    await user.type(cerca, "Mo");
+    expect(await screen.findByText("Monza")).toBeInTheDocument();
+    const vecchia = mockFetch.mock.calls.find((c) => c[0] === "/api/config/comuni?search=Mi");
+    expect(vecchia?.[1]?.signal.aborted).toBe(true);
+    await act(async () => rifiutaMilano(new Error("Ricerca superata")));
+    expect(screen.getByText("Monza")).toBeInTheDocument();
+    expect(screen.queryByText(/Nessun comune/i)).not.toBeInTheDocument();
+  });
+
+  it("una ricerca precedente lenta non sovrascrive i risultati della ricerca corrente", async () => {
+    const user = userEvent.setup();
+    let risolviMilano: (risposta: Response) => void = () => undefined;
+    const milanoInAttesa = new Promise<Response>((resolve) => {
+      risolviMilano = resolve;
+    });
+    instradaFetch({
+      "/api/config/comuni?search=Mi": () => milanoInAttesa,
+      "/api/config/comuni?search=Mo": () =>
+        Promise.resolve(okResponse({ comuni: [creaComune({ id: 2, nome: "Monza" })] })),
+    });
+    renderForm();
+    const cerca = screen.getByPlaceholderText(/Cerca comune/i);
+    await user.type(cerca, "Mi");
+    await waitFor(() => expect(mockFetch.mock.calls.some((c) => c[0] === "/api/config/comuni?search=Mi")).toBe(true));
+    await user.clear(cerca);
+    await user.type(cerca, "Mo");
+    expect(await screen.findByText("Monza")).toBeInTheDocument();
+    const vecchia = mockFetch.mock.calls.find((c) => c[0] === "/api/config/comuni?search=Mi");
+    expect(vecchia?.[1]?.signal.aborted).toBe(true);
+    await act(async () => risolviMilano(okResponse({ comuni: [creaComune()] })));
+    expect(screen.getByText("Monza")).toBeInTheDocument();
+    expect(screen.queryByText("Milano")).not.toBeInTheDocument();
   });
 });
 
@@ -647,6 +769,7 @@ describe("FormSegnalazione - checkbox tipologia", () => {
   it("permette di scrivere nella textarea notaAltroTipologia", async () => {
     const user = userEvent.setup();
     const { container } = renderForm();
+    vaiAlPasso("Non conformità");
     await user.click(container.querySelector("#chk3") as HTMLElement);
     const ta = await waitFor(() => screen.getByPlaceholderText(/Specifica la tipologia/i));
     await user.type(ta, "Tipologia custom");
@@ -702,6 +825,7 @@ describe("FormSegnalazione - checkbox problemi", () => {
   it("permette di scrivere nella textarea notaAltroProblema", async () => {
     const user = userEvent.setup();
     const { container } = renderForm();
+    vaiAlPasso("Non conformità");
     await user.click(container.querySelector("#chk7") as HTMLElement);
     const ta = await waitFor(() => screen.getByPlaceholderText(/Specifica il problema/i));
     await user.type(ta, "Problema custom");
@@ -716,7 +840,8 @@ describe("FormSegnalazione - checkbox problemi", () => {
 describe("FormSegnalazione - personalizzazione invio PEC", () => {
   it("permette di modificare destinatarioNome", async () => {
     const user = userEvent.setup();
-    renderForm();
+    renderFormReferente();
+    vaiAlPasso("Allegati e invio");
     const input = screen.getByLabelText("Destinatario");
     await user.type(input, "Sindaco Test");
     expect((input as HTMLInputElement).value).toBe("Sindaco Test");
@@ -724,7 +849,8 @@ describe("FormSegnalazione - personalizzazione invio PEC", () => {
 
   it("permette di modificare pecCcAggiuntive", async () => {
     const user = userEvent.setup();
-    renderForm();
+    renderFormReferente();
+    vaiAlPasso("Allegati e invio");
     const input = screen.getByLabelText(/PEC aggiuntive in copia/i);
     await user.type(input, "cc1@pec.it");
     expect((input as HTMLInputElement).value).toBe("cc1@pec.it");
@@ -732,7 +858,8 @@ describe("FormSegnalazione - personalizzazione invio PEC", () => {
 
   it("permette di modificare oggettoPec", async () => {
     const user = userEvent.setup();
-    renderForm();
+    renderFormReferente();
+    vaiAlPasso("Allegati e invio");
     const input = screen.getByLabelText("Oggetto PEC");
     await user.type(input, "Oggetto test");
     expect((input as HTMLInputElement).value).toBe("Oggetto test");
@@ -740,7 +867,8 @@ describe("FormSegnalazione - personalizzazione invio PEC", () => {
 
   it("permette di modificare testoIntroduttivoPec", async () => {
     const user = userEvent.setup();
-    renderForm();
+    renderFormReferente();
+    vaiAlPasso("Allegati e invio");
     const ta = screen.getByLabelText("Testo introduttivo PEC");
     await user.type(ta, "Intro test");
     expect((ta as HTMLTextAreaElement).value).toBe("Intro test");
@@ -748,7 +876,8 @@ describe("FormSegnalazione - personalizzazione invio PEC", () => {
 
   it("permette di modificare descrizioneLibera", async () => {
     const user = userEvent.setup();
-    renderForm();
+    renderFormReferente();
+    vaiAlPasso("Non conformità");
     const ta = screen.getByLabelText(/Descrizione libera/i);
     await user.type(ta, "Descrizione dettagliata");
     expect((ta as HTMLTextAreaElement).value).toBe("Descrizione dettagliata");
@@ -756,7 +885,8 @@ describe("FormSegnalazione - personalizzazione invio PEC", () => {
 
   it("attivando lo switch includiArpa cambia stato", async () => {
     const user = userEvent.setup();
-    renderForm();
+    renderFormReferente();
+    vaiAlPasso("Allegati e invio");
     const sw = screen.getAllByRole("switch")[0];
     await user.click(sw);
     await waitFor(() => {
@@ -764,14 +894,17 @@ describe("FormSegnalazione - personalizzazione invio PEC", () => {
     });
   });
 
-  it("mittenteVisibile true mostra 'volontario' nel testo", () => {
-    renderForm();
+  it("mittenteVisibile true mostra 'volontario' nel testo", async () => {
+    renderFormReferente();
+    vaiAlPasso("Allegati e invio");
+    await act(async () => {});
     expect(screen.getByText(/Mittente: volontario/)).toBeInTheDocument();
   });
 
   it("attivando/disattivando lo switch mittenteVisibile cambia testo", async () => {
     const user = userEvent.setup();
-    renderForm();
+    renderFormReferente();
+    vaiAlPasso("Allegati e invio");
     expect(screen.getByText(/Mittente: volontario/)).toBeInTheDocument();
     const sw = screen.getAllByRole("switch")[1];
     await user.click(sw);
@@ -786,12 +919,13 @@ describe("FormSegnalazione - personalizzazione invio PEC", () => {
 // -----------------------------------------------------------------------------
 
 describe("FormSegnalazione - allegati upload", () => {
-  it("mostra il label di caricamento quando allegati.length < 4", () => {
+  it("mostra il label di caricamento quando allegati.length < 4", async () => {
     renderForm();
-    expect(screen.getByText(/Carica allegato \(max 4\)/i)).toBeInTheDocument();
+    await act(async () => {});
+    expect(screen.getByText(/Carica allegato \(massimo 4\)/i)).toBeInTheDocument();
   });
 
-  it("mostra 'Raggiunto il limite massimo di 4 allegati' quando allegati.length === 4", async () => {
+  it("mostra 'Hai raggiunto il limite di 4 allegati' quando allegati.length === 4", async () => {
     const allegati = Array.from({ length: 4 }, (_, i) => ({
       id: `a${i}`,
       segnalazioneId: "s1",
@@ -804,7 +938,7 @@ describe("FormSegnalazione - allegati upload", () => {
     configuraFetch({ segnalazione: seg });
     renderForm({ segnalazioneId: "s1" });
     await waitFor(() => {
-      expect(screen.getByText(/Raggiunto il limite massimo di 4 allegati/i)).toBeInTheDocument();
+      expect(screen.getByText(/Hai raggiunto il limite di 4 allegati/i)).toBeInTheDocument();
     });
     // Il label di caricamento non è visibile.
     expect(screen.queryByText(/Carica allegato/i)).not.toBeInTheDocument();
@@ -817,9 +951,7 @@ describe("FormSegnalazione - allegati upload", () => {
     const file = new File(["data"], "foto.jpg", { type: "image/jpeg" });
     await user.upload(input, file);
     await waitFor(() => {
-      expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Salva prima la bozza" })
-      );
+      expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Salva prima la bozza" }));
     });
   });
 
@@ -837,9 +969,7 @@ describe("FormSegnalazione - allegati upload", () => {
     const bigFile = new File([new ArrayBuffer(11 * 1024 * 1024)], "big.jpg", { type: "image/jpeg" });
     await user.upload(input, bigFile);
     await waitFor(() => {
-      expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "File troppo grande" })
-      );
+      expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "File troppo grande" }));
     });
   });
 
@@ -867,9 +997,7 @@ describe("FormSegnalazione - allegati upload", () => {
     await waitFor(() => {
       expect(screen.getByText("foto.jpg")).toBeInTheDocument();
     });
-    expect(toastSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Allegato caricato" })
-    );
+    expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Allegato caricato" }));
   });
 
   it("upload PDF imposta tipo='documento' (file.type non inizia con image/)", async () => {
@@ -896,22 +1024,20 @@ describe("FormSegnalazione - allegati upload", () => {
     // Verifica che il POST /api/upload sia stato chiamato con FormData
     // che contiene tipo="documento" (derivato dal file.type non image/).
     await waitFor(() => {
-      const uploadCall = mockFetch.mock.calls.find(
-        (c) => c[0] === "/api/upload" && c[1]?.method === "POST"
-      );
+      const uploadCall = mockFetch.mock.calls.find((c) => c[0] === "/api/upload" && c[1]?.method === "POST");
       expect(uploadCall).toBeDefined();
-      const fd = uploadCall![1].body as FormData;
+      const fd = uploadCall?.[1].body as FormData;
       expect(fd.get("tipo")).toBe("documento");
       expect(fd.get("segnalazioneId")).toBe("s1");
     });
   });
 
-  it("upload con errore server mostra toast 'Errore upload'", async () => {
+  it("upload con errore server mostra il toast di caricamento con il messaggio del server", async () => {
     const user = userEvent.setup();
     const seg = creaSegnalazione({ id: "s1" });
     configuraFetch({ segnalazione: seg });
     // Override: /api/upload risponde 400.
-    mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+    mockFetch.mockImplementation(async (url: string | URL, _init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       if (u.startsWith("/api/config/comuni")) return okResponse({ comuni: [creaComune()] });
       if (u.startsWith("/api/segnalazioni/")) return okResponse({ segnalazione: seg });
@@ -927,15 +1053,15 @@ describe("FormSegnalazione - allegati upload", () => {
     await user.upload(input, file);
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore upload", description: "Tipo non supportato" })
+        expect.objectContaining({ title: "Caricamento allegato non riuscito", description: "Tipo non supportato" }),
       );
     });
   });
 
-  it("upload con errore di rete mostra toast 'Errore di rete'", async () => {
+  it("upload con errore di rete mostra il toast di connessione", async () => {
     const user = userEvent.setup();
     const seg = creaSegnalazione({ id: "s1" });
-    mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+    mockFetch.mockImplementation(async (url: string | URL, _init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       if (u.startsWith("/api/config/comuni")) return okResponse({ comuni: [creaComune()] });
       if (u.startsWith("/api/segnalazioni/")) return okResponse({ segnalazione: seg });
@@ -951,7 +1077,10 @@ describe("FormSegnalazione - allegati upload", () => {
     await user.upload(input, file);
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore di rete", description: "network down" })
+        expect.objectContaining({
+          title: "Connessione non riuscita",
+          description: "Verifica la connessione e riprova.",
+        }),
       );
     });
   });
@@ -962,7 +1091,7 @@ describe("FormSegnalazione - allegati upload", () => {
 // -----------------------------------------------------------------------------
 
 describe("FormSegnalazione - allegati eliminazione", () => {
-  it("elimina allegato con conferma positiva: chiama DELETE /api/allegati?id=", async () => {
+  it("elimina l'allegato dopo la conferma nel dialog: chiama DELETE /api/allegati?id=", async () => {
     const user = userEvent.setup();
     const allegato = {
       id: "a-del",
@@ -974,37 +1103,26 @@ describe("FormSegnalazione - allegati eliminazione", () => {
     };
     const seg = creaSegnalazione({ id: "s1", allegati: [allegato as never] });
     configuraFetch({ segnalazione: seg });
-    confirmSpy.mockReturnValue(true);
     renderForm({ segnalazioneId: "s1" });
     await waitFor(() => {
       expect(screen.getByText("eliminami.jpg")).toBeInTheDocument();
     });
-    // Pulsante elimina (con icona Trash2). Lo si trova come pulsante ghost
-    // adiacente al nome del file.
-    const deleteBtn = screen.getAllByRole("button").find((b) =>
-      b.querySelector("svg.lucide-trash2") || b.querySelector("svg[class*='lucide-trash2']")
-    ) || screen.getByLabelText("");
-    // Approccio alternativo: cerca il pulsante tramite il nome del file e poi
-    // risali al contenitore (li) e trova il pulsante al suo interno.
+    // Il pulsante di eliminazione è nel contenitore (li) del file.
     const li = screen.getByText("eliminami.jpg").closest("li");
-    const btn = li!.querySelector("button")!;
+    const btn = li?.querySelector("button") as HTMLButtonElement;
     await user.click(btn);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Elimina allegato" }));
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(
-        `/api/allegati?id=a-del`,
-        expect.objectContaining({ method: "DELETE" })
-      );
+      expect(mockFetch).toHaveBeenCalledWith(`/api/allegati?id=a-del`, expect.objectContaining({ method: "DELETE" }));
     });
     // L'allegato viene rimosso dalla lista.
     await waitFor(() => {
       expect(screen.queryByText("eliminami.jpg")).not.toBeInTheDocument();
     });
-    expect(toastSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Allegato eliminato" })
-    );
+    expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Allegato eliminato" }));
   });
 
-  it("non elimina se confirm restituisce false", async () => {
+  it("non elimina l'allegato se il dialog di conferma viene annullato", async () => {
     const user = userEvent.setup();
     const allegato = {
       id: "a-keep",
@@ -1016,24 +1134,24 @@ describe("FormSegnalazione - allegati eliminazione", () => {
     };
     const seg = creaSegnalazione({ id: "s1", allegati: [allegato as never] });
     configuraFetch({ segnalazione: seg });
-    confirmSpy.mockReturnValue(false);
     renderForm({ segnalazioneId: "s1" });
     await waitFor(() => {
       expect(screen.getByText("mantienimi.jpg")).toBeInTheDocument();
     });
     const li = screen.getByText("mantienimi.jpg").closest("li");
-    const btn = li!.querySelector("button")!;
+    const btn = li?.querySelector("button") as HTMLButtonElement;
     await user.click(btn);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Annulla" }));
     // La DELETE non viene chiamata.
     const deleteCall = mockFetch.mock.calls.find(
-      (c) => typeof c[0] === "string" && c[0].startsWith("/api/allegati") && c[1]?.method === "DELETE"
+      (c) => typeof c[0] === "string" && c[0].startsWith("/api/allegati") && c[1]?.method === "DELETE",
     );
     expect(deleteCall).toBeUndefined();
     // L'allegato resta visibile.
     expect(screen.getByText("mantienimi.jpg")).toBeInTheDocument();
   });
 
-  it("eliminazione con errore server mostra toast 'Errore eliminazione'", async () => {
+  it("eliminazione con errore server mostra il toast di eliminazione con il messaggio del server", async () => {
     const user = userEvent.setup();
     const allegato = {
       id: "a-err",
@@ -1044,7 +1162,6 @@ describe("FormSegnalazione - allegati eliminazione", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
     };
     const seg = creaSegnalazione({ id: "s1", allegati: [allegato as never] });
-    confirmSpy.mockReturnValue(true);
     mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       const method = init?.method ?? "GET";
@@ -1060,18 +1177,19 @@ describe("FormSegnalazione - allegati eliminazione", () => {
       expect(screen.getByText("errore.jpg")).toBeInTheDocument();
     });
     const li = screen.getByText("errore.jpg").closest("li");
-    const btn = li!.querySelector("button")!;
+    const btn = li?.querySelector("button") as HTMLButtonElement;
     await user.click(btn);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Elimina allegato" }));
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore eliminazione", description: "Non autorizzato" })
+        expect.objectContaining({ title: "Eliminazione non riuscita", description: "Non autorizzato" }),
       );
     });
     // L'allegato resta visibile (non viene rimosso).
     expect(screen.getByText("errore.jpg")).toBeInTheDocument();
   });
 
-  it("eliminazione con errore di rete mostra toast 'Errore di rete'", async () => {
+  it("eliminazione con errore di rete mostra il toast di connessione", async () => {
     const user = userEvent.setup();
     const allegato = {
       id: "a-net",
@@ -1082,7 +1200,6 @@ describe("FormSegnalazione - allegati eliminazione", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
     };
     const seg = creaSegnalazione({ id: "s1", allegati: [allegato as never] });
-    confirmSpy.mockReturnValue(true);
     mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       const method = init?.method ?? "GET";
@@ -1098,11 +1215,15 @@ describe("FormSegnalazione - allegati eliminazione", () => {
       expect(screen.getByText("rete.jpg")).toBeInTheDocument();
     });
     const li = screen.getByText("rete.jpg").closest("li");
-    const btn = li!.querySelector("button")!;
+    const btn = li?.querySelector("button") as HTMLButtonElement;
     await user.click(btn);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Elimina allegato" }));
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore di rete", description: "connessione persa" })
+        expect.objectContaining({
+          title: "Connessione non riuscita",
+          description: "Verifica la connessione e riprova.",
+        }),
       );
     });
   });
@@ -1119,6 +1240,8 @@ describe("FormSegnalazione - allegati eliminazione", () => {
     const seg = creaSegnalazione({ id: "s1", allegati: [allegato as never] });
     configuraFetch({ segnalazione: seg });
     renderForm({ segnalazioneId: "s1" });
+    await waitFor(() => expect(screen.getByText("scaricabile.jpg")).toBeInTheDocument());
+    vaiAlPasso("Allegati e invio");
     await waitFor(() => {
       const link = screen.getByRole("link", { name: /scaricabile.jpg/i });
       expect(link).toHaveAttribute("href", "/api/allegati/a-link/download");
@@ -1138,7 +1261,7 @@ describe("FormSegnalazione - allegati eliminazione", () => {
     configuraFetch({ segnalazione: seg });
     renderForm({ segnalazioneId: "s1" });
     await waitFor(() => {
-      expect(screen.getByText("documento")).toBeInTheDocument();
+      expect(screen.getByText("Documento")).toBeInTheDocument();
     });
   });
 });
@@ -1161,7 +1284,7 @@ describe("FormSegnalazione - GPS", () => {
     await user.click(screen.getByRole("button", { name: /Rileva posizione GPS/i }));
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "GPS non disponibile", variant: "destructive" })
+        expect.objectContaining({ title: "GPS non disponibile", variant: "destructive" }),
       );
     });
     // Ripristina geolocation per i test successivi.
@@ -1175,37 +1298,51 @@ describe("FormSegnalazione - GPS", () => {
   it("GPS con successo imposta latitudine/longitudine e mostra toast", async () => {
     const user = userEvent.setup();
     renderForm();
-    geoGetCurrentPosition.mockImplementation((success: (p: { coords: { latitude: number; longitude: number } }) => void) => {
-      success({ coords: { latitude: 45.4642, longitude: 9.19 } });
-    });
+    geoGetCurrentPosition.mockImplementation(
+      (success: (p: { coords: { latitude: number; longitude: number } }) => void) => {
+        success({ coords: { latitude: 45.4642, longitude: 9.19 } });
+      },
+    );
     await user.click(screen.getByRole("button", { name: /Rileva posizione GPS/i }));
     await waitFor(() => {
-      expect((screen.getByDisplayValue("45.4642") as HTMLInputElement)).toBeInTheDocument();
+      expect(screen.getByDisplayValue("45.4642") as HTMLInputElement).toBeInTheDocument();
     });
-    expect((screen.getByDisplayValue("9.19") as HTMLInputElement)).toBeInTheDocument();
-    expect(toastSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Posizione rilevata" })
-    );
+    expect(screen.getByDisplayValue("9.19") as HTMLInputElement).toBeInTheDocument();
+    expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Posizione rilevata" }));
   });
 
   it("GPS con errore mostra toast 'Errore GPS' con il messaggio", async () => {
     const user = userEvent.setup();
     renderForm();
-    geoGetCurrentPosition.mockImplementation(
-      (_s: unknown, error: (e: Error) => void) => {
-        error(new Error("Permission denied"));
-      }
-    );
+    geoGetCurrentPosition.mockImplementation((_s: unknown, error: (e: Error) => void) => {
+      error(new Error("Permission denied"));
+    });
     await user.click(screen.getByRole("button", { name: /Rileva posizione GPS/i }));
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Errore GPS",
-          description: "Permission denied",
+          title: "Posizione non rilevata",
+          description: "Impossibile rilevare la posizione. Riprova o inserisci le coordinate manualmente.",
           variant: "destructive",
-        })
+        }),
       );
     });
+  });
+
+  it("GPS negato (codice 1) mostra il messaggio sul permesso", async () => {
+    const user = userEvent.setup();
+    renderForm();
+    geoGetCurrentPosition.mockImplementation((_s: unknown, error: (e: { code: number; message: string }) => void) => {
+      error({ code: 1, message: "denied" });
+    });
+    await user.click(screen.getByRole("button", { name: /Rileva posizione GPS/i }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: "Permesso di posizione negato. Inserisci l'indirizzo o le coordinate manualmente.",
+        }),
+      ),
+    );
   });
 });
 
@@ -1214,20 +1351,20 @@ describe("FormSegnalazione - GPS", () => {
 // -----------------------------------------------------------------------------
 
 describe("FormSegnalazione - salvataggio", () => {
-  it("salva con indirizzo vuoto mostra toast 'Indirizzo obbligatorio'", async () => {
+  it("salva con indirizzo vuoto mostra l'errore collegato al campo, senza toast", async () => {
     const user = userEvent.setup();
     renderForm();
     // Indirizzo lasciato vuoto (default).
     await user.click(screen.getByRole("button", { name: /Salva ed esci alla lista/i }));
+    const campo = screen.getByLabelText("Indirizzo *");
     await waitFor(() => {
-      expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Indirizzo obbligatorio", variant: "destructive" })
-      );
+      expect(campo).toHaveAttribute("aria-invalid", "true");
     });
+    expect(campo).toHaveAttribute("aria-describedby", "errore-indirizzo");
+    expect(document.getElementById("errore-indirizzo")).toHaveTextContent("Inserisci l'indirizzo");
+    expect(toastSpy).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Indirizzo obbligatorio" }));
     // Nessuna chiamata POST.
-    const postCall = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST"
-    );
+    const postCall = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST");
     expect(postCall).toBeUndefined();
   });
 
@@ -1239,37 +1376,50 @@ describe("FormSegnalazione - salvataggio", () => {
     await user.type(screen.getByLabelText("Indirizzo *"), "Via Roma 1");
     await user.click(screen.getByRole("button", { name: /Salva ed esci alla lista/i }));
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(
-        "/api/segnalazioni",
-        expect.objectContaining({ method: "POST" })
-      );
+      expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni", expect.objectContaining({ method: "POST" }));
     });
     await waitFor(() => {
       expect(onSaved).toHaveBeenCalledWith("new-id");
     });
-    expect(toastSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Segnalazione salvata" })
-    );
+    expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Bozza salvata" }));
   });
 
-  it("salva con 'Salva e continua' (esci=false) non chiama onSaved", async () => {
+  it("un doppio click prima del rerender crea una sola bozza", async () => {
+    let completaPost: (risposta: Response) => void = () => undefined;
+    const postInAttesa = new Promise<Response>((resolve) => {
+      completaPost = resolve;
+    });
+    mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).startsWith("/api/config/comuni")) return okResponse({ comuni: [creaComune()] });
+      if (url === "/api/segnalazioni" && init?.method === "POST") return postInAttesa;
+      return okResponse({});
+    });
+    renderForm();
+    fireEvent.change(screen.getByLabelText("Indirizzo *"), { target: { value: "Via unica 1" } });
+    const bottone = screen.getByRole("button", { name: /Salva bozza/i });
+    act(() => {
+      fireEvent.click(bottone);
+      fireEvent.click(bottone);
+    });
+    expect(mockFetch.mock.calls.filter((c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST")).toHaveLength(1);
+    await act(async () => {
+      completaPost(okResponse({ segnalazione: { id: "new-id" } }));
+    });
+  });
+
+  it("salva bozza (esci=false) non chiama onSaved", async () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();
     renderForm({ onSaved });
     await user.type(screen.getByLabelText("Indirizzo *"), "Via Roma 2");
-    await user.click(screen.getByRole("button", { name: /Salva e continua a modificare/i }));
+    await user.click(screen.getByRole("button", { name: /Salva bozza/i }));
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(
-        "/api/segnalazioni",
-        expect.objectContaining({ method: "POST" })
-      );
+      expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni", expect.objectContaining({ method: "POST" }));
     });
     // onSaved non viene chiamato.
     expect(onSaved).not.toHaveBeenCalled();
     // Toast di successo comunque mostrato.
-    expect(toastSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Segnalazione salvata" })
-    );
+    expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Bozza salvata" }));
   });
 
   it("salva in modifica (PUT /api/segnalazioni/:id) con successo", async () => {
@@ -1293,17 +1443,14 @@ describe("FormSegnalazione - salvataggio", () => {
     });
     await user.click(screen.getByRole("button", { name: /Salva ed esci alla lista/i }));
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(
-        "/api/segnalazioni/s-edit",
-        expect.objectContaining({ method: "PUT" })
-      );
+      expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/s-edit", expect.objectContaining({ method: "PUT" }));
     });
     await waitFor(() => {
       expect(onSaved).toHaveBeenCalledWith("s-edit");
     });
   });
 
-  it("salva con errore server mostra toast 'Errore' con description", async () => {
+  it("salva con errore server mostra il toast di salvataggio con il messaggio del server", async () => {
     const user = userEvent.setup();
     mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
@@ -1320,15 +1467,15 @@ describe("FormSegnalazione - salvataggio", () => {
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Errore",
+          title: "Salvataggio non riuscito",
           description: "Comune non valido",
           variant: "destructive",
-        })
+        }),
       );
     });
   });
 
-  it("salva con errore di rete mostra toast 'Errore' con description", async () => {
+  it("salva con errore di rete mostra il toast di salvataggio con il messaggio dell'errore", async () => {
     const user = userEvent.setup();
     mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
@@ -1345,15 +1492,15 @@ describe("FormSegnalazione - salvataggio", () => {
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Errore",
+          title: "Salvataggio non riuscito",
           description: "server irraggiungibile",
           variant: "destructive",
-        })
+        }),
       );
     });
   });
 
-  it("salva con risposta 200 OK ma JSON non valido: toast di successo, onSaved non chiamato", async () => {
+  it("salva con risposta 200 OK ma JSON non valido: segnala risposta incompleta", async () => {
     const user = userEvent.setup();
     const onSaved = vi.fn();
     mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
@@ -1361,9 +1508,8 @@ describe("FormSegnalazione - salvataggio", () => {
       const method = init?.method ?? "GET";
       if (u.startsWith("/api/config/comuni")) return okResponse({ comuni: [creaComune()] });
       if (u === "/api/segnalazioni" && method === "POST") {
-        // res.ok true ma json() lancia: il catch ritorna {} -> data vuoto.
-        // La funzione prosegue nel ramo successo (no throw), ma data.segnalazione?.id
-        // è undefined, quindi onSaved non viene chiamato.
+        // res.ok true ma json() lancia: senza ID la bozza non può essere
+        // considerata salvata e occorre verificare l'elenco prima di riprovare.
         return invalidJsonResponse();
       }
       return okResponse({});
@@ -1373,14 +1519,16 @@ describe("FormSegnalazione - salvataggio", () => {
     await user.click(screen.getByRole("button", { name: /Salva ed esci alla lista/i }));
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Segnalazione salvata" })
+        expect.objectContaining({
+          title: "Salvataggio non riuscito",
+          description: expect.stringContaining("Risposta incompleta"),
+        }),
       );
     });
-    // onSaved non chiamato perché data.segnalazione?.id è undefined.
     expect(onSaved).not.toHaveBeenCalled();
   });
 
-  it("salva con errore HTTP e JSON non valido (catch in res.json) usa 'Errore salvataggio'", async () => {
+  it("salva con errore HTTP e corpo non JSON mostra il messaggio generico", async () => {
     const user = userEvent.setup();
     mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
@@ -1405,10 +1553,10 @@ describe("FormSegnalazione - salvataggio", () => {
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Errore",
-          description: "Errore salvataggio",
+          title: "Salvataggio non riuscito",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
           variant: "destructive",
-        })
+        }),
       );
     });
   });
@@ -1416,7 +1564,7 @@ describe("FormSegnalazione - salvataggio", () => {
   it("salva invia payload con segnalazionePrecedenteId quando fornito", async () => {
     const user = userEvent.setup();
     const segPrec = creaSegnalazione({ id: "s-prec", indirizzoVia: "Via Precedente 9" });
-    mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+    mockFetch.mockImplementation(async (url: string | URL, _init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       if (u.startsWith("/api/config/comuni")) return okResponse({ comuni: [creaComune()] });
       if (u === "/api/segnalazioni/s-prec") return okResponse({ segnalazione: segPrec });
@@ -1431,11 +1579,9 @@ describe("FormSegnalazione - salvataggio", () => {
     });
     await user.click(screen.getByRole("button", { name: /Salva ed esci alla lista/i }));
     await waitFor(() => {
-      const postCall = mockFetch.mock.calls.find(
-        (c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST"
-      );
+      const postCall = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST");
       expect(postCall).toBeDefined();
-      const body = JSON.parse(postCall![1].body as string);
+      const body = JSON.parse(postCall?.[1].body as string);
       expect(body.segnalazionePrecedenteId).toBe("s-prec");
     });
   });
@@ -1460,7 +1606,7 @@ describe("FormSegnalazione - salvataggio", () => {
       expect(btnSave).toBeDisabled();
     });
     // Anche "Salva e continua" è disabilitato.
-    expect(screen.getByRole("button", { name: /Salva e continua a modificare/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Salva bozza/i })).toBeDisabled();
   });
 });
 
@@ -1484,15 +1630,13 @@ describe("FormSegnalazione - demo mode", () => {
     });
     expect(toastSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Errore",
+        title: "Salvataggio non riuscito",
         description: "demo readonly",
         variant: "destructive",
-      })
+      }),
     );
     // Nessuna POST effettuata (la guardia ha lanciato prima della fetch).
-    const postCall = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST"
-    );
+    const postCall = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST");
     expect(postCall).toBeUndefined();
   });
 
@@ -1519,7 +1663,7 @@ describe("FormSegnalazione - demo mode", () => {
           title: "Azione non disponibile",
           description: "demo readonly",
           variant: "destructive",
-        })
+        }),
       );
     });
     // Nessuna chiamata a /api/upload.
@@ -1547,29 +1691,31 @@ describe("FormSegnalazione - demo mode", () => {
     });
     isDemo = true;
     const li = screen.getByText("demo.jpg").closest("li");
-    const btn = li!.querySelector("button")!;
+    const btn = li?.querySelector("button") as HTMLButtonElement;
     await user.click(btn);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Elimina allegato" }));
     await waitFor(() => {
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           title: "Azione non disponibile",
           description: "demo readonly",
           variant: "destructive",
-        })
+        }),
       );
     });
     // Nessuna DELETE effettuata.
     const deleteCall = mockFetch.mock.calls.find(
-      (c) => typeof c[0] === "string" && c[0].startsWith("/api/allegati") && c[1]?.method === "DELETE"
+      (c) => typeof c[0] === "string" && c[0].startsWith("/api/allegati") && c[1]?.method === "DELETE",
     );
     expect(deleteCall).toBeUndefined();
     // L'allegato resta visibile.
     expect(screen.getByText("demo.jpg")).toBeInTheDocument();
   });
 
-  it("in demo mode il form si renderizza comunque (nessun blocco al rendering)", () => {
+  it("in demo mode il form si renderizza comunque (nessun blocco al rendering)", async () => {
     isDemoMock.mockReturnValue(true);
     renderForm({ user: creaUserDemo() });
+    await act(async () => {});
     expect(screen.getByRole("heading", { name: "Nuova segnalazione" })).toBeInTheDocument();
   });
 });
@@ -1639,27 +1785,25 @@ describe("FormSegnalazione - recidiva", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("Via Ricorrente 7")).toBeInTheDocument();
     });
-    expect((screen.getByDisplayValue("00100") as HTMLInputElement)).toBeInTheDocument();
-    expect((screen.getByDisplayValue("Bar Ricorrente") as HTMLInputElement)).toBeInTheDocument();
-    expect((screen.getByDisplayValue("41.9") as HTMLInputElement)).toBeInTheDocument();
-    expect((screen.getByDisplayValue("12.5") as HTMLInputElement)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("00100") as HTMLInputElement).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Bar Ricorrente") as HTMLInputElement).toBeInTheDocument();
+    expect(screen.getByDisplayValue("41.9") as HTMLInputElement).toBeInTheDocument();
+    expect(screen.getByDisplayValue("12.5") as HTMLInputElement).toBeInTheDocument();
   });
 
-  it("non mostra il box recidiva se segnalazionePrecedenteId non è fornito", () => {
+  it("non mostra il box recidiva se segnalazionePrecedenteId non è fornito", async () => {
     renderForm();
+    await attendiEffetti();
+    expect(mockFetch).not.toHaveBeenCalledWith(expect.stringMatching(/^\/api\/segnalazioni\//));
     expect(screen.queryByText("Segnalazione collegata per recidiva")).not.toBeInTheDocument();
   });
 
   it("non mostra il box recidiva se la fetch precedente ritorna null", async () => {
     configuraFetch({ segnalazionePrecedente: null });
     renderForm({ segnalazionePrecedenteId: "s-mancante" });
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/s-mancante");
-    });
-    // Attende che eventuali state update si stabilizzino.
-    await waitFor(() => {
-      expect(screen.queryByText("Segnalazione collegata per recidiva")).not.toBeInTheDocument();
-    });
+    await attendiEffetti();
+    expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/s-mancante");
+    expect(screen.queryByText("Segnalazione collegata per recidiva")).not.toBeInTheDocument();
   });
 });
 
@@ -1696,7 +1840,7 @@ describe("FormSegnalazione - modifica con allegati esistenti", () => {
     expect(screen.getByText("esistente2.pdf")).toBeInTheDocument();
   });
 
-  it("carica i checkbox tipologia/problemi della segnalazione esistente", async () => {
+  it("carica lo stato dei checkbox, dello switch ARPA e le note della segnalazione esistente", async () => {
     const seg = creaSegnalazione({
       id: "s1",
       chkVetroPianoInclinato: true,
@@ -1712,16 +1856,14 @@ describe("FormSegnalazione - modifica con allegati esistenti", () => {
       mittenteVisibile: false,
     });
     configuraFetch({ segnalazione: seg });
-    renderForm({ segnalazioneId: "s1" });
-    const { container } = await waitFor(() => {
-      expect(screen.getByDisplayValue("Nota tip")).toBeInTheDocument();
-      return { container: undefined };
-    }).then(() => ({ container: document.body }));
-    // Verifica che le textarea "altro" siano visibili (i checkbox sono attivi).
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("Nota tip")).toBeInTheDocument();
-      expect(screen.getByDisplayValue("Nota prob")).toBeInTheDocument();
-    });
+    const { container } = renderFormReferente({ segnalazioneId: "s1" });
+    await waitFor(() => expect(screen.getByDisplayValue("Nota tip")).toBeInTheDocument());
+    for (const id of ["chk1", "chk2", "chk3", "chk4", "chk5", "chk6", "chk7"]) {
+      expect(container.querySelector(`#${id}`)).toHaveAttribute("data-state", "checked");
+    }
+    expect(container.querySelector("#includi-arpa")).toHaveAttribute("data-state", "checked");
+    expect(container.querySelector("#mittente-visibile")).toHaveAttribute("data-state", "unchecked");
+    expect(screen.getByDisplayValue("Nota prob")).toBeInTheDocument();
     // mittenteVisibile false -> "referente CieloBuio"
     expect(screen.getByText(/Mittente: referente CieloBuio/)).toBeInTheDocument();
   });
@@ -1792,9 +1934,8 @@ describe("FormSegnalazione - edge case", () => {
       return okResponse({});
     });
     renderForm({ segnalazionePrecedenteId: "s-vuoto" });
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/s-vuoto");
-    });
+    await attendiEffetti();
+    expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/s-vuoto");
     expect(screen.queryByText("Segnalazione collegata per recidiva")).not.toBeInTheDocument();
   });
 
@@ -1815,11 +1956,8 @@ describe("FormSegnalazione - edge case", () => {
     await user.type(screen.getByLabelText("Indirizzo *"), "Via NoId 1");
     await user.click(screen.getByRole("button", { name: /Salva ed esci alla lista/i }));
     await waitFor(() => {
-      expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Segnalazione salvata" })
-      );
+      expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Salvataggio non riuscito" }));
     });
-    // onSaved non viene chiamato perché data.segnalazione?.id è undefined.
     expect(onSaved).not.toHaveBeenCalled();
   });
 
@@ -1827,35 +1965,32 @@ describe("FormSegnalazione - edge case", () => {
     const user = userEvent.setup();
     renderForm();
     await user.type(screen.getByLabelText("Indirizzo *"), "Via POST 1");
-    await user.click(screen.getByRole("button", { name: /Salva e continua a modificare/i }));
+    await user.click(screen.getByRole("button", { name: /Salva bozza/i }));
     await waitFor(() => {
-      const postCall = mockFetch.mock.calls.find(
-        (c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST"
-      );
+      const postCall = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST");
       expect(postCall).toBeDefined();
     });
     // Nessuna PUT.
     const putCall = mockFetch.mock.calls.find(
-      (c) => typeof c[0] === "string" && c[0].startsWith("/api/segnalazioni/") && c[1]?.method === "PUT"
+      (c) => typeof c[0] === "string" && c[0].startsWith("/api/segnalazioni/") && c[1]?.method === "PUT",
     );
     expect(putCall).toBeUndefined();
   });
 
   it("salva invia payload con tutti i campi del form", async () => {
     const user = userEvent.setup();
-    renderForm();
+    renderFormReferente();
     await user.type(screen.getByLabelText("Indirizzo *"), "Via Payload 1");
     await user.type(screen.getByLabelText(/Nome esercizio/i), "Bar Payload");
     await user.type(screen.getByLabelText("CAP"), "20100");
+    vaiAlPasso("Allegati e invio");
     await user.type(screen.getByLabelText("Destinatario"), "Sindaco Payload");
     await user.type(screen.getByLabelText(/PEC aggiuntive/i), "cc@pec.it");
     await user.click(screen.getByRole("button", { name: /Salva ed esci alla lista/i }));
     await waitFor(() => {
-      const postCall = mockFetch.mock.calls.find(
-        (c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST"
-      );
+      const postCall = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni" && c[1]?.method === "POST");
       expect(postCall).toBeDefined();
-      const body = JSON.parse(postCall![1].body as string);
+      const body = JSON.parse(postCall?.[1].body as string);
       expect(body.indirizzoVia).toBe("Via Payload 1");
       expect(body.nomeEsercizio).toBe("Bar Payload");
       expect(body.cap).toBe("20100");
@@ -1867,634 +2002,647 @@ describe("FormSegnalazione - edge case", () => {
       expect(body.segnalazionePrecedenteId).toBeNull();
     });
   }, 30000);
+});
 
-  describe("FormSegnalazione - modifica con campi null (rami ?? su fallback)", () => {
-    it("precarica campi null/undefined usando fallback ?? e ?? null", async () => {
-      mockFetch.mockImplementation((url: string) => {
-        if (url.includes("/api/config/comuni")) {
-          return Promise.resolve(okResponse({ comuni: [], total: 0 }));
-        }
-        if (url.match(/\/api\/segnalazioni\/s-null-fields/)) {
-          return Promise.resolve(
-            okResponse({
-              segnalazione: {
-                id: "s-null-fields",
-                indirizzoVia: null, // ?? "" su linea 118
-                comuneId: null, // ?? null su linea 119
-                cap: null, // ?? "" su linea 120
-                latitudine: null,
-                longitudine: null,
-                nomeEsercizio: null, // ?? "" su linea 124
-                chkVetroPianoInclinato: false,
-                chkVetroCurvo: false,
-                chkAltroTipologia: false,
-                notaAltroTipologia: null,
-                chkLuceVersoAlto: false,
-                chkAbbagliamento: false,
-                chkLuceIntrusiva: false,
-                chkAltroProblema: false,
-                notaAltroProblema: null,
-                descrizioneLibera: null,
-                destinatarioNome: null,
-                oggettoPec: null,
-                testoIntroduttivoPec: null,
-                pecCcAggiuntive: null,
-                includiArpa: false,
-                mittenteVisibile: true,
-                stato: "bozza",
-                numeroProtocollo: null,
-              },
-            })
-          );
-        }
-        return Promise.resolve(okResponse({}));
-      });
+// -----------------------------------------------------------------------------
+// Helper per le risposte anomale, i campi null e le asserzioni negative
+// -----------------------------------------------------------------------------
 
-      render(
-        <FormSegnalazione
-          user={creaUser()}
-          segnalazioneId="s-null-fields"
-          onBack={vi.fn()}
-          onSaved={vi.fn()}
-        />
-      );
+const MESSAGGIO_GENERICO = "Operazione non riuscita. Riprova tra qualche istante.";
 
-      // Attendi che il form sia caricato (indirizzo vuoto percampo null)
-      await waitFor(() => {
-        expect(screen.getByText(/Modifica segnalazione/i)).toBeInTheDocument();
-      });
+/** Risposta con corpo non leggibile come JSON. */
+function rispostaNonJson(ok: boolean): Response {
+  return {
+    ok,
+    status: ok ? 200 : 500,
+    json: async () => {
+      throw new Error("corpo non JSON");
+    },
+    text: async () => "",
+  } as unknown as Response;
+}
+
+/** Risposta di errore HTTP con corpo JSON privo del campo error. */
+function rispostaErroreVuota(status: number): Response {
+  return {
+    ok: false,
+    status,
+    json: async () => ({}),
+    text: async () => "",
+  } as unknown as Response;
+}
+
+/**
+ * Instrada le chiamate fetch: il primo prefisso che corrisponde all'URL
+ * determina la risposta. Le route non elencate ricevono l'elenco comuni
+ * oppure un corpo vuoto.
+ */
+function instradaFetch(instradamenti: Record<string, () => Promise<Response>>, comuni: unknown[] = []) {
+  mockFetch.mockImplementation(async (url: string | URL) => {
+    const u = typeof url === "string" ? url : url.toString();
+    const prefisso = Object.keys(instradamenti).find((p) => u.startsWith(p));
+    if (prefisso) return instradamenti[prefisso]();
+    if (u.startsWith("/api/config/comuni")) return okResponse({ comuni });
+    return okResponse({});
+  });
+}
+
+/** Segnalazione con i campi facoltativi a null: copre i ripieghi del form. */
+function segnalazioneConCampiNull(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id,
+    numeroProtocollo: null,
+    indirizzoVia: null,
+    comuneId: null,
+    cap: null,
+    latitudine: null,
+    longitudine: null,
+    nomeEsercizio: null,
+    livelloRecidiva: null,
+    chkVetroPianoInclinato: false,
+    chkVetroCurvo: false,
+    chkAltroTipologia: false,
+    notaAltroTipologia: null,
+    chkLuceVersoAlto: false,
+    chkAbbagliamento: false,
+    chkLuceIntrusiva: false,
+    chkAltroProblema: false,
+    notaAltroProblema: null,
+    descrizioneLibera: null,
+    destinatarioNome: null,
+    oggettoPec: null,
+    testoIntroduttivoPec: null,
+    pecCcAggiuntive: null,
+    includiArpa: false,
+    mittenteVisibile: true,
+    stato: "bozza",
+    ...overrides,
+  };
+}
+
+/** Lascia completare le promise pendenti prima di un'asserzione negativa. */
+async function attendiEffetti() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+}
+
+/** Restituisce l'input file del form; il test fallisce se non è presente. */
+function inputFile(container: HTMLElement): HTMLInputElement {
+  const input = container.querySelector('input[type="file"]');
+  expect(input).not.toBeNull();
+  return input as HTMLInputElement;
+}
+
+/** Allegato di prova per le segnalazioni con allegati. */
+function allegatoDiProva(id: string, nomeOriginale: string, tipo = "foto") {
+  return {
+    id,
+    segnalazioneId: "s1",
+    tipo,
+    urlStorage: `/storage/${id}`,
+    nomeOriginale,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+/** Apre la conferma dell'allegato indicato e clicca il pulsante scelto nel dialog. */
+async function rispondiConfermaAllegato(
+  user: ReturnType<typeof userEvent.setup>,
+  nomeFile: string,
+  pulsante: "Elimina allegato" | "Annulla",
+) {
+  const riga = screen.getByText(nomeFile).closest("li");
+  await user.click(riga?.querySelector("button") as HTMLButtonElement);
+  await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: pulsante }));
+}
+
+// -----------------------------------------------------------------------------
+// Campi null, ripieghi e ricerca comuni
+// -----------------------------------------------------------------------------
+
+describe("FormSegnalazione - campi null e ripieghi", () => {
+  it("precarica una segnalazione con campi null lasciando vuoti i campi del luogo", async () => {
+    instradaFetch({
+      "/api/segnalazioni/s-null": () =>
+        Promise.resolve(okResponse({ segnalazione: segnalazioneConCampiNull("s-null") })),
     });
+    renderFormReferente({ segnalazioneId: "s-null" });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Modifica segnalazione" })).toBeInTheDocument());
+    expect(screen.getByLabelText("Indirizzo *")).toHaveValue("");
+    expect(screen.getByLabelText("CAP")).toHaveValue("");
+    expect(screen.getByLabelText(/Nome esercizio/i)).toHaveValue("");
+    expect((screen.getByLabelText("Latitudine") as HTMLInputElement).value).toBe("");
+    expect(screen.getByText(/Mittente: volontario/)).toBeInTheDocument();
+  });
 
-    describe("FormSegnalazione - rami difensivi residui per coverage 100%", () => {
-      it("precarica segnalazione con tutti i campi null (rami ?? su linee 157-162)", async () => {
-        mockFetch.mockImplementation((url: string) => {
-          if (url.includes("/api/config/comuni")) {
-            return Promise.resolve(okResponse({ comuni: [], total: 0 }));
-          }
-          if (url.match(/\/api\/segnalazioni\/s-all-null/)) {
-            return Promise.resolve(
-              okResponse({
-                segnalazione: {
-                  id: "s-all-null",
-                  indirizzoVia: null,
-                  comuneId: null,
-                  cap: null,
-                  latitudine: null,
-                  longitudine: null,
-                  nomeEsercizio: null,
-                  livelloRecidiva: null,
-                  chkVetroPianoInclinato: false,
-                  chkVetroCurvo: false,
-                  chkAltroTipologia: false,
-                  notaAltroTipologia: null,
-                  chkLuceVersoAlto: false,
-                  chkAbbagliamento: false,
-                  chkLuceIntrusiva: false,
-                  chkAltroProblema: false,
-                  notaAltroProblema: null,
-                  descrizioneLibera: null,
-                  destinatarioNome: null,
-                  oggettoPec: null,
-                  testoIntroduttivoPec: null,
-                  pecCcAggiuntive: null,
-                  includiArpa: false,
-                  mittenteVisibile: true,
-                  stato: "bozza",
-                  numeroProtocollo: null,
-                },
-              })
-            );
-          }
-          return Promise.resolve(okResponse({}));
-        });
-
-        render(
-          <FormSegnalazione
-            user={creaUser()}
-            segnalazioneId="s-all-null"
-            onBack={vi.fn()}
-            onSaved={vi.fn()}
-          />
-        );
-
-        await waitFor(() => {
-          expect(screen.getByText(/Modifica segnalazione/i)).toBeInTheDocument();
-        });
-      });
-
-      it("ricerca comuni con risposta senza campo comuni (ramo ?? [] linea 189)", async () => {
-        vi.useFakeTimers({ shouldAdvanceTime: true });
-        mockFetch.mockImplementation((url: string) => {
-          if (url.includes("/api/config/comuni") && url.includes("search=")) {
-            // Risposta senza campo 'comuni' -> fallback ?? []
-            return Promise.resolve(okResponse({ total: 0 }));
-          }
-          if (url.includes("/api/config/comuni")) {
-            return Promise.resolve(okResponse({ comuni: [], total: 0 }));
-          }
-          return Promise.resolve(okResponse({}));
-        });
-
-        render(
-          <FormSegnalazione user={creaUser()} onBack={vi.fn()} onSaved={vi.fn()} />
-        );
-
-        await waitFor(() => {
-          expect(screen.getByText(/Nuova segnalazione/i)).toBeInTheDocument();
-        });
-
-        const indirizzo = screen.getByLabelText(/Indirizzo/i);
-        await userEvent.type(indirizzo, "via test");
-
-        const search = screen.getByPlaceholderText(/Cerca comune/i);
-        await userEvent.type(search, "Ber");
-
-        vi.advanceTimersByTime(400);
-
-        await waitFor(() => {
-          // Nessun comune mostrato (lista vuota per fallback)
-          expect(screen.queryByText(/Bergamo/i)).not.toBeInTheDocument();
-        });
-
-        vi.useRealTimers();
-      });
-
-      it("selezione comune con risultato null (ramo ?? null linea 197)", async () => {
-        // Mock della ricerca comuni che ritorna un comune, ma poi la find
-        // ritorna undefined quando si seleziona (caso limite)
-        mockFetch.mockImplementation((url: string) => {
-          if (url.includes("/api/config/comuni") && url.includes("search=")) {
-            return Promise.resolve(
-              okResponse({
-                comuni: [
-                  {
-                    id: 1,
-                    nome: "Bergamo",
-                    cap: "24100",
-                    provincia: { sigla: "BG", regioneId: 1, regione: { regione: "LOMBARDIA" } },
-                    pecComune: "comune@pec.it",
-                  },
-                ],
-                total: 1,
-              })
-            );
-          }
-          if (url.includes("/api/config/comuni")) {
-            return Promise.resolve(okResponse({ comuni: [], total: 0 }));
-          }
-          return Promise.resolve(okResponse({}));
-        });
-
-        render(
-          <FormSegnalazione user={creaUser()} onBack={vi.fn()} onSaved={vi.fn()} />
-        );
-
-        await waitFor(() => {
-          expect(screen.getByText(/Nuova segnalazione/i)).toBeInTheDocument();
-        });
-
-        const search = screen.getByPlaceholderText(/Cerca comune/i);
-        await userEvent.type(search, "Bergamo");
-
-        await waitFor(() => {
-          expect(screen.getByText("Bergamo")).toBeInTheDocument();
-        });
-
-        // Click sul comune: la find ritorna il comune, quindi comuneSelezionato
-        // viene impostato. Il ramo ?? null si triggera se la find ritorna undefined,
-        // ma questo richiede un mock che ritorna una lista vuota dopo la ricerca.
-        // Per coprire il ramo, verifichiamo che il comune venga selezionato.
-        await userEvent.click(screen.getByText("Bergamo"));
-      });
-
-      it("upload con errore fetch (non-Error) (ramo e instanceof Error linea 289)", async () => {
-        // Usa una segnalazione esistente (segnalazioneId) per avere un id valido
-        mockFetch.mockImplementation((url: string) => {
-          if (url.includes("/api/config/comuni")) {
-            return Promise.resolve(okResponse({ comuni: [], total: 0 }));
-          }
-          if (url.match(/\/api\/segnalazioni\/s-upload-err/)) {
-            return Promise.resolve(
-              okResponse({
-                segnalazione: {
-                  id: "s-upload-err",
-                  indirizzoVia: "Via 1",
-                  comuneId: null,
-                  cap: "24040",
-                  latitudine: null,
-                  longitudine: null,
-                  nomeEsercizio: null,
-                  livelloRecidiva: 1,
-                  chkVetroPianoInclinato: false,
-                  chkVetroCurvo: false,
-                  chkAltroTipologia: false,
-                  notaAltroTipologia: null,
-                  chkLuceVersoAlto: false,
-                  chkAbbagliamento: false,
-                  chkLuceIntrusiva: false,
-                  chkAltroProblema: false,
-                  notaAltroProblema: null,
-                  descrizioneLibera: null,
-                  destinatarioNome: null,
-                  oggettoPec: null,
-                  testoIntroduttivoPec: null,
-                  pecCcAggiuntive: null,
-                  includiArpa: false,
-                  mittenteVisibile: true,
-                  stato: "bozza",
-                  numeroProtocollo: null,
-                },
-              })
-            );
-          }
-          if (url.includes("/api/upload")) {
-            return Promise.reject("Network error string");
-          }
-          return Promise.resolve(okResponse({}));
-        });
-
-        render(
-          <FormSegnalazione
-            user={creaUser()}
-            segnalazioneId="s-upload-err"
-            onBack={vi.fn()}
-            onSaved={vi.fn()}
-          />
-        );
-
-        await waitFor(() => {
-          expect(screen.getByText(/Modifica segnalazione/i)).toBeInTheDocument();
-        });
-
-        const fileInput = document.querySelector('input[type="file"]');
-        if (fileInput) {
-          const file = new File(["test"], "test.jpg", { type: "image/jpeg" });
-          await userEvent.upload(fileInput as HTMLInputElement, file);
-        }
-
-        await waitFor(() => {
-          expect(toastSpy).toHaveBeenCalledWith(
-            expect.objectContaining({
-              description: "Errore sconosciuto",
-            })
-          );
-        }, { timeout: 3000 });
-      });
-
-      it("upload con errore HTTP senza message (ramo ?? Errore sconosciuto linea 325)", async () => {
-        mockFetch.mockImplementation((url: string) => {
-          if (url.includes("/api/config/comuni")) {
-            return Promise.resolve(okResponse({ comuni: [], total: 0 }));
-          }
-          if (url.match(/\/api\/segnalazioni\/s-upload-err2/)) {
-            return Promise.resolve(
-              okResponse({
-                segnalazione: {
-                  id: "s-upload-err2",
-                  indirizzoVia: "Via 1",
-                  comuneId: null,
-                  cap: "24040",
-                  latitudine: null,
-                  longitudine: null,
-                  nomeEsercizio: null,
-                  livelloRecidiva: 1,
-                  chkVetroPianoInclinato: false,
-                  chkVetroCurvo: false,
-                  chkAltroTipologia: false,
-                  notaAltroTipologia: null,
-                  chkLuceVersoAlto: false,
-                  chkAbbagliamento: false,
-                  chkLuceIntrusiva: false,
-                  chkAltroProblema: false,
-                  notaAltroProblema: null,
-                  descrizioneLibera: null,
-                  destinatarioNome: null,
-                  oggettoPec: null,
-                  testoIntroduttivoPec: null,
-                  pecCcAggiuntive: null,
-                  includiArpa: false,
-                  mittenteVisibile: true,
-                  stato: "bozza",
-                  numeroProtocollo: null,
-                },
-              })
-            );
-          }
-          if (url.includes("/api/upload")) {
-            return Promise.resolve({
-              ok: false,
-              status: 400,
-              json: async () => ({}),
-              text: async () => "",
-            });
-          }
-          return Promise.resolve(okResponse({}));
-        });
-
-        render(
-          <FormSegnalazione
-            user={creaUser()}
-            segnalazioneId="s-upload-err2"
-            onBack={vi.fn()}
-            onSaved={vi.fn()}
-          />
-        );
-
-        await waitFor(() => {
-          expect(screen.getByText(/Modifica segnalazione/i)).toBeInTheDocument();
-        });
-
-        const fileInput = document.querySelector('input[type="file"]');
-        if (fileInput) {
-          const file = new File(["test"], "test.jpg", { type: "image/jpeg" });
-          await userEvent.upload(fileInput as HTMLInputElement, file);
-        }
-
-        await waitFor(() => {
-          expect(toastSpy).toHaveBeenCalledWith(
-            expect.objectContaining({
-              description: "Errore sconosciuto",
-            })
-          );
-        }, { timeout: 3000 });
-      });
-
-      it("eliminazione allegato con errore fetch (non-Error) (ramo linea 333)", async () => {
-        // Prima carica una segnalazione esistente con un allegato
-        mockFetch.mockImplementation((url: string) => {
-          if (url.includes("/api/config/comuni")) {
-            return Promise.resolve(okResponse({ comuni: [], total: 0 }));
-          }
-          if (url.match(/\/api\/segnalazioni\/s-with-att/)) {
-            return Promise.resolve(
-              okResponse({
-                segnalazione: {
-                  id: "s-with-att",
-                  indirizzoVia: "Via 1",
-                  comuneId: null,
-                  cap: "24040",
-                  latitudine: null,
-                  longitudine: null,
-                  nomeEsercizio: null,
-                  livelloRecidiva: 1,
-                  chkVetroPianoInclinato: false,
-                  chkVetroCurvo: false,
-                  chkAltroTipologia: false,
-                  notaAltroTipologia: null,
-                  chkLuceVersoAlto: false,
-                  chkAbbagliamento: false,
-                  chkLuceIntrusiva: false,
-                  chkAltroProblema: false,
-                  notaAltroProblema: null,
-                  descrizioneLibera: null,
-                  destinatarioNome: null,
-                  oggettoPec: null,
-                  testoIntroduttivoPec: null,
-                  pecCcAggiuntive: null,
-                  includiArpa: false,
-                  mittenteVisibile: true,
-                  stato: "bozza",
-                  numeroProtocollo: null,
-                  allegati: [
-                    { id: "a1", urlStorage: "s-with-att/file.jpg", nomeOriginale: "file.jpg", tipo: "foto" },
-                  ],
-                },
-              })
-            );
-          }
-          if (url.includes("/api/allegati?id=a1")) {
-            // DELETE rejection con non-Error
-            return Promise.reject("Network error");
-          }
-          return Promise.resolve(okResponse({}));
-        });
-
-        vi.stubGlobal("confirm", () => true);
-
-        render(
-          <FormSegnalazione
-            user={creaUser()}
-            segnalazioneId="s-with-att"
-            onBack={vi.fn()}
-            onSaved={vi.fn()}
-          />
-        );
-
-        await waitFor(() => {
-          expect(screen.getByText(/Modifica segnalazione/i)).toBeInTheDocument();
-        });
-
-        // Attendi che l'allegato sia caricato
-        await waitFor(() => {
-          expect(screen.getByText("file.jpg")).toBeInTheDocument();
-        });
-
-        // Click elimina allegato
-        const deleteBtn = screen.getByRole("button", { name: "" });
-        // Cerca il pulsante con icona Trash2
-        const deleteButtons = screen.getAllByRole("button");
-        const trashBtn = deleteButtons.find((b) => b.querySelector("svg.lucide-trash-2"));
-        if (trashBtn) {
-          await userEvent.click(trashBtn);
-        }
-
-        await waitFor(() => {
-          expect(toastSpy).toHaveBeenCalledWith(
-            expect.objectContaining({
-              description: "Errore sconosciuto",
-            })
-          );
-        });
-
-        vi.unstubAllGlobals();
-      });
-
-      it("input longitudine con valore vuoto imposta null (ramo linea 505)", async () => {
-        render(
-          <FormSegnalazione user={creaUser()} onBack={vi.fn()} onSaved={vi.fn()} />
-        );
-
-        await waitFor(() => {
-          expect(screen.getByText(/Nuova segnalazione/i)).toBeInTheDocument();
-        });
-
-        // Trova l'input longitudine (placeholder "auto")
-        const longInputs = screen.getAllByPlaceholderText("auto");
-        const longInput = longInputs[1];
-
-        // Inserisci un valore (input type=number ritorna number)
-        await userEvent.type(longInput, "9.5");
-
-        // Cancella il valore per triggerare setLongitudine(null)
-        await userEvent.clear(longInput);
-        // L'input type=number vuoto ha value ""
-        expect((longInput as HTMLInputElement).value).toBe("");
-      });
+  it("recidiva con campi null nella segnalazione precedente mostra il livello base 1 e campi vuoti", async () => {
+    instradaFetch({
+      "/api/segnalazioni/s-prec-null": () =>
+        Promise.resolve(okResponse({ segnalazione: segnalazioneConCampiNull("s-prec-null") })),
     });
+    renderForm({ segnalazionePrecedenteId: "s-prec-null" });
+    await waitFor(() => expect(screen.getByText("Segnalazione collegata per recidiva")).toBeInTheDocument());
+    // Il livello mostrato è (livelloRecidiva ?? 1) + 1.
+    expect(screen.getByText(/livello 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/senza protocollo/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Indirizzo *")).toHaveValue("");
+  });
+
+  it("ricerca comuni con risposta senza il campo comuni mostra l'elenco vuoto", async () => {
+    const user = userEvent.setup();
+    instradaFetch({
+      "/api/config/comuni?search=": () => Promise.resolve(okResponse({ total: 0 })),
+    });
+    renderForm();
+    await waitFor(() =>
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/config/comuni",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+    await user.type(screen.getByPlaceholderText(/Cerca comune/i), "Ber");
+    await waitFor(
+      () =>
+        expect(mockFetch).toHaveBeenCalledWith(
+          `/api/config/comuni?search=${encodeURIComponent("Ber")}`,
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        ),
+      { timeout: 2000 },
+    );
+    await attendiEffetti();
+    expect(screen.getByText(/Nessun comune/i)).toBeInTheDocument();
+    expect(toastSpy).not.toHaveBeenCalled();
+  });
+
+  it("selezionando un comune trovato dalla ricerca ne mostra i dati e compila il CAP", async () => {
+    const user = userEvent.setup();
+    const bergamo = creaComune({
+      id: 2,
+      nome: "Bergamo",
+      cap: "24100",
+      pecComune: "comune@pec.it",
+      nomeSindaco: null,
+      provincia: {
+        sigla: "BG",
+        nome: "Bergamo",
+        regione: { regione: "Lombardia", riferimentoLegge: "LR 31/2015" },
+      },
+    });
+    instradaFetch({
+      "/api/config/comuni?search=": () => Promise.resolve(okResponse({ comuni: [bergamo] })),
+    });
+    renderForm();
+    await waitFor(() =>
+      expect(mockFetch).toHaveBeenCalledWith(
+        "/api/config/comuni",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+    await user.type(screen.getByPlaceholderText(/Cerca comune/i), "Bergamo");
+    await user.click(await screen.findByText("Bergamo"));
+    await waitFor(() => expect(screen.getByText("Comune selezionato:")).toBeInTheDocument());
+    const box = screen.getByText("Comune selezionato:").closest("div");
+    expect(box?.textContent).toContain("LR 31/2015");
+    expect(box?.textContent).toContain("comune@pec.it");
+    expect(screen.getByLabelText("CAP")).toHaveValue("24100");
+  });
+
+  it("nessun comune risulta selezionato finché l'utente non sceglie dalla lista", async () => {
+    const user = userEvent.setup();
+    configuraFetch({ comuni: [creaComune()] });
+    renderForm();
+    await waitFor(() => expect(screen.getByText("Milano")).toBeInTheDocument());
+    expect(screen.queryByText("Comune selezionato:")).not.toBeInTheDocument();
+    await user.click(screen.getByText("Milano"));
+    await waitFor(() => expect(screen.getByText("Comune selezionato:")).toBeInTheDocument());
+  });
+
+  it("in modifica un comuneId presente nella lista mostra il comune selezionato", async () => {
+    configuraFetch({
+      comuni: [creaComune()],
+      segnalazione: creaSegnalazione({ id: "s-comune-ok", comuneId: 1 }),
+    });
+    renderForm({ segnalazioneId: "s-comune-ok" });
+    await waitFor(() => expect(screen.getByText("Comune selezionato:")).toBeInTheDocument());
+  });
+
+  it("riconosce il Comune esistente anche se la lista arriva dopo il dettaglio", async () => {
+    let risolviComuni: (risposta: Response) => void = () => undefined;
+    const elencoInAttesa = new Promise<Response>((resolve) => {
+      risolviComuni = resolve;
+    });
+    mockFetch.mockImplementation(async (url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith("/api/config/comuni")) return elencoInAttesa;
+      if (u === "/api/segnalazioni/s-lento") {
+        return okResponse({ segnalazione: creaSegnalazione({ id: "s-lento", comuneId: 1 }) });
+      }
+      return okResponse({});
+    });
+    renderForm({ segnalazioneId: "s-lento" });
+    await screen.findByDisplayValue("Via Test 1");
+    expect(screen.queryByText("Comune selezionato:")).not.toBeInTheDocument();
+    await act(async () => {
+      risolviComuni(okResponse({ comuni: [creaComune()] }));
+    });
+    await waitFor(() => expect(screen.getByText("Comune selezionato:")).toBeInTheDocument());
+  });
+
+  it("in modifica un comuneId assente dalla lista non seleziona alcun comune", async () => {
+    configuraFetch({
+      comuni: [creaComune({ id: 1, nome: "Milano" })],
+      segnalazione: creaSegnalazione({ id: "s-comune-mismatch", comuneId: 999 }),
+    });
+    renderForm({ segnalazioneId: "s-comune-mismatch" });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Modifica segnalazione" })).toBeInTheDocument());
+    await attendiEffetti();
+    expect(screen.queryByText("Comune selezionato:")).not.toBeInTheDocument();
+  });
+
+  it("mostra il Comune salvato nel dettaglio anche se non appare nei risultati di ricerca", async () => {
+    const segnalazione = creaSegnalazione({
+      id: "s-comune-dettaglio",
+      comuneId: 999,
+      cap: "27029",
+      comune: { id: 999, nome: "Vigevano", cap: "27029", pecComune: "vigevano@pec.it", nomeSindaco: null },
+      provincia: { id: 2, sigla: "PV", nome: "Pavia" },
+      regione: { id: 1, regione: "LOMBARDIA", riferimentoLegge: "LR 31/2015" },
+    });
+    configuraFetch({ comuni: [creaComune()], segnalazione });
+    renderForm({ segnalazioneId: segnalazione.id });
+    const box = await screen.findByText("Comune selezionato:");
+    expect(box.closest("div")?.textContent).toContain("Vigevano (PV)");
+    expect(screen.getByLabelText("CAP")).toHaveValue("27029");
+  });
+
+  it("in modifica con CAP vuoto il CAP viene compilato dal comune selezionato", async () => {
+    const segnalazione = creaSegnalazione({
+      id: "s1",
+      stato: "bozza",
+      volontarioId: "u-test",
+      comuneId: 1,
+      cap: "",
+    } as never);
+    configuraFetch({ comuni: [creaComune()], segnalazione });
+    renderForm({ segnalazioneId: "s1", user: creaUser({ id: "u-test" }) });
+    await waitFor(() => expect(screen.getByDisplayValue(String(creaComune().cap))).toBeInTheDocument());
+  });
+
+  it("in modifica, un comune senza sindaco usa il nome del comune come destinatario", async () => {
+    configuraFetch({
+      comuni: [creaComune({ nomeSindaco: null })],
+      segnalazione: creaSegnalazione({
+        id: "s1",
+        stato: "bozza",
+        volontarioId: "u-test",
+        comuneId: 1,
+        destinatarioNome: null,
+      } as never),
+    });
+    renderForm({
+      segnalazioneId: "s1",
+      user: creaUser({ id: "u-test", ruolo: "referente_provinciale", provinciaId: 1 }),
+    });
+    await waitFor(() => expect(screen.getByDisplayValue("Comune di Milano")).toBeInTheDocument());
+  });
+
+  it("con campi già compilati la selezione del comune non sovrascrive destinatario, oggetto e testo", async () => {
+    const user = userEvent.setup();
+    const segnalazione = creaSegnalazione({
+      id: "s1",
+      stato: "bozza",
+      volontarioId: "u-test",
+      comuneId: 1,
+      cap: "20100",
+      destinatarioNome: "Destinatario già scritto",
+      oggettoPec: "Oggetto già scritto",
+      testoIntroduttivoPec: "Testo già scritto",
+    } as never);
+    configuraFetch({ comuni: [creaComune()], segnalazione });
+    renderForm({
+      segnalazioneId: "s1",
+      user: creaUser({ id: "u-test", ruolo: "referente_provinciale", provinciaId: 1 }),
+    });
+    await waitFor(() => expect(screen.getByText("Milano")).toBeInTheDocument());
+    await user.click(screen.getByText("Milano"));
+    await waitFor(() => expect(screen.getByText("Comune selezionato:")).toBeInTheDocument());
+    expect(screen.getByDisplayValue("Destinatario già scritto")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Oggetto già scritto")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Testo già scritto")).toBeInTheDocument();
   });
 });
 
 // -----------------------------------------------------------------------------
-// Rami residui per coverage 100% (linee 157, 160, 161, 162, 197, 289, 353)
+// Caricamento e recidiva con risposte anomale
 // -----------------------------------------------------------------------------
 
-describe("FormSegnalazione - rami residui coverage 100%", () => {
-  // I test precedenti nel file (in particolare "eliminazione allegato con
-  // errore fetch (non-Error)") chiamano vi.unstubAllGlobals() per ripristinare
-  // lo stub di confirm. Questo rimuove anche lo stub globale di fetch e
-  // confirm, rendendo mockFetch e confirmSpy inutilizzabili per i test
-  // successivi. Si re-stubbano entrambi prima di ogni test di questo blocco.
-  beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch);
-    vi.stubGlobal("confirm", confirmSpy);
-  });
-
-  it("recidiva con campi null nella segnalazione precedente (linee 157, 160, 161, 162)", async () => {
-    // La segnalazione precedente ha livelloRecidiva, indirizzoVia, comuneId
-    // e cap null: i rami `?? 1`, `?? ""`, `?? null`, `?? ""` del useEffect
-    // di recidiva vengono tutti triggerati.
-    mockFetch.mockImplementation((url: string) => {
-      if (url.includes("/api/config/comuni")) {
-        return Promise.resolve(okResponse({ comuni: [], total: 0 }));
-      }
-      if (url.match(/\/api\/segnalazioni\/s-prec-null/)) {
-        return Promise.resolve(
-          okResponse({
-            segnalazione: {
-              id: "s-prec-null",
-              numeroProtocollo: null,
-              indirizzoVia: null, // ?? "" (linea 160)
-              comuneId: null, // ?? null (linea 161)
-              cap: null, // ?? "" (linea 162)
-              latitudine: null,
-              longitudine: null,
-              nomeEsercizio: null,
-              livelloRecidiva: null, // ?? 1 (linea 157)
-              chkVetroPianoInclinato: false,
-              chkVetroCurvo: false,
-              chkAltroTipologia: false,
-              notaAltroTipologia: null,
-              chkLuceVersoAlto: false,
-              chkAbbagliamento: false,
-              chkLuceIntrusiva: false,
-              chkAltroProblema: false,
-              notaAltroProblema: null,
-              descrizioneLibera: null,
-              destinatarioNome: null,
-              oggettoPec: null,
-              testoIntroduttivoPec: null,
-              pecCcAggiuntive: null,
-              includiArpa: false,
-              mittenteVisibile: true,
-              stato: "bozza",
-            },
-          })
-        );
-      }
-      return Promise.resolve(okResponse({}));
-    });
-
-    render(
-      <FormSegnalazione
-        user={creaUser()}
-        segnalazionePrecedenteId="s-prec-null"
-        onBack={vi.fn()}
-        onSaved={vi.fn()}
-      />
+describe("FormSegnalazione - caricamento con risposte anomale", () => {
+  it("modifica: errore con corpo non JSON mostra il toast di caricamento con il messaggio di ripiego", async () => {
+    instradaFetch({ "/api/segnalazioni/s1": () => Promise.resolve(rispostaNonJson(false)) });
+    renderForm({ segnalazioneId: "s1" });
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Caricamento non riuscito",
+          description: "La segnalazione non è stata caricata.",
+          variant: "destructive",
+        }),
+      ),
     );
-
-    // Attende che il box recidiva sia renderizzato (segno che la fetch
-    // precedente è completata e i campi null sono stati precompilati
-    // con i fallback ??). Il livello mostrato è livelloRecidiva ?? 1 + 1 = 2.
-    await waitFor(() => {
-      expect(screen.getByText("Segnalazione collegata per recidiva")).toBeInTheDocument();
-    });
-    // Livello recidiva mostrato = (null ?? 1) + 1 = 2
-    expect(screen.getByText(/livello 2/i)).toBeInTheDocument();
   });
 
-  it("modifica con comuneId non presente nella lista comuni (linea 197: c ?? null)", async () => {
-    // La segnalazione in modifica ha comuneId=999, ma la lista comuni
-    // restituita da /api/config/comuni non lo contiene: la find ritorna
-    // undefined e il ramo `c ?? null` del useEffect su comuneId viene
-    // triggerato, impostando comuneSelezionato a null.
-    mockFetch.mockImplementation((url: string) => {
-      if (url.includes("/api/config/comuni")) {
-        return Promise.resolve(
-          okResponse({
-            comuni: [creaComune({ id: 1, nome: "Milano" })],
-            total: 1,
-          })
-        );
-      }
-      if (url.match(/\/api\/segnalazioni\/s-comune-mismatch/)) {
-        return Promise.resolve(
-          okResponse({
-            segnalazione: {
-              id: "s-comune-mismatch",
-              indirizzoVia: "Via Test 1",
-              comuneId: 999, // non presente nella lista comuni
-              cap: "24040",
-              latitudine: null,
-              longitudine: null,
-              nomeEsercizio: null,
-              livelloRecidiva: 1,
-              chkVetroPianoInclinato: false,
-              chkVetroCurvo: false,
-              chkAltroTipologia: false,
-              notaAltroTipologia: null,
-              chkLuceVersoAlto: false,
-              chkAbbagliamento: false,
-              chkLuceIntrusiva: false,
-              chkAltroProblema: false,
-              notaAltroProblema: null,
-              descrizioneLibera: null,
-              destinatarioNome: null,
-              oggettoPec: null,
-              testoIntroduttivoPec: null,
-              pecCcAggiuntive: null,
-              includiArpa: false,
-              mittenteVisibile: true,
-              stato: "bozza",
-              numeroProtocollo: null,
-            },
-          })
-        );
-      }
-      return Promise.resolve(okResponse({}));
-    });
+  it("modifica: risposta OK con corpo non JSON impedisce il salvataggio", async () => {
+    instradaFetch({ "/api/segnalazioni/s1": () => Promise.resolve(rispostaNonJson(true)) });
+    renderForm({ segnalazioneId: "s1" });
+    await waitFor(() => expect(screen.queryByText("Caricamento…")).not.toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: "Modifica segnalazione" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Indirizzo *")).toHaveValue("");
+    expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Caricamento non riuscito" }));
+    expect(screen.getByRole("button", { name: "Salva bozza" })).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Impossibile caricare");
+  });
 
-    render(
-      <FormSegnalazione
-        user={creaUser()}
-        segnalazioneId="s-comune-mismatch"
-        onBack={vi.fn()}
-        onSaved={vi.fn()}
-      />
+  it("recidiva: risposta di errore non mostra il box recidiva e non segnala errori", async () => {
+    instradaFetch({ "/api/segnalazioni/prec": () => Promise.resolve(errorResponse(404, "non trovata")) });
+    renderForm({ segnalazionePrecedenteId: "prec" });
+    await attendiEffetti();
+    expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/prec");
+    expect(screen.queryByText("Segnalazione collegata per recidiva")).not.toBeInTheDocument();
+    expect(toastSpy).not.toHaveBeenCalled();
+  });
+
+  it("recidiva: risposta senza segnalazione non mostra il box recidiva", async () => {
+    instradaFetch({ "/api/segnalazioni/prec": () => Promise.resolve(okResponse({})) });
+    renderForm({ segnalazionePrecedenteId: "prec" });
+    await attendiEffetti();
+    expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/prec");
+    expect(screen.queryByText("Segnalazione collegata per recidiva")).not.toBeInTheDocument();
+    expect(toastSpy).not.toHaveBeenCalled();
+  });
+
+  it("recidiva: corpo non JSON non mostra il box recidiva", async () => {
+    instradaFetch({ "/api/segnalazioni/prec": () => Promise.resolve(invalidJsonResponse()) });
+    renderForm({ segnalazionePrecedenteId: "prec" });
+    await attendiEffetti();
+    expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/prec");
+    expect(screen.queryByText("Segnalazione collegata per recidiva")).not.toBeInTheDocument();
+    expect(toastSpy).not.toHaveBeenCalled();
+  });
+
+  it("recidiva: errore di rete non mostra il box recidiva", async () => {
+    instradaFetch({ "/api/segnalazioni/prec-rotta": () => Promise.reject(new Error("rete assente")) });
+    renderForm({ segnalazionePrecedenteId: "prec-rotta" });
+    await attendiEffetti();
+    expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/prec-rotta");
+    expect(screen.queryByText("Segnalazione collegata per recidiva")).not.toBeInTheDocument();
+  });
+
+  it("elenco comuni con corpo non JSON mostra il form senza toast", async () => {
+    instradaFetch({ "/api/config/comuni": () => Promise.resolve(invalidJsonResponse()) });
+    renderForm();
+    await attendiEffetti();
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/api/config/comuni",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
-
-    // Attende che il form sia caricato. Il ramo `c ?? null` è valutato
-    // durante il render (useEffect su [comuneId, comuni]): comuneId=999
-    // è truthy, la find ritorna undefined, `c ?? null` assegna null a
-    // comuneSelezionato. Il box "Comune selezionato" non è visibile.
-    await waitFor(() => {
-      expect(screen.getByText(/Modifica segnalazione/i)).toBeInTheDocument();
-    });
-    // Il box info del comune non è visibile perché comuneSelezionato è null
-    expect(screen.queryByText(/Comune selezionato:/i)).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Cerca comune...")).toBeInTheDocument();
+    expect(toastSpy).not.toHaveBeenCalled();
   });
 
-  it("salva con errore di rete non-Error (linea 289: e instanceof Error false)", async () => {
-    // Il POST /api/segnalazioni lancia una stringa (non un Error):
-    // il catch di salva() deve usare il fallback "Errore sconosciuto".
+  it("elenco comuni con errore di rete lascia il form utilizzabile", async () => {
+    const user = userEvent.setup();
+    instradaFetch({ "/api/config/comuni": () => Promise.reject(new Error("rete assente")) });
+    renderForm();
+    await attendiEffetti();
+    const indirizzo = screen.getByLabelText("Indirizzo *");
+    await user.type(indirizzo, "Via Offline 1");
+    expect(indirizzo).toHaveValue("Via Offline 1");
+  });
+
+  it("caricamento con rifiuto non Error mostra il messaggio generico", async () => {
+    instradaFetch({ "/api/segnalazioni/s1": () => Promise.reject("rete non definita") });
+    renderForm({ segnalazioneId: "s1" });
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Caricamento non riuscito", description: MESSAGGIO_GENERICO }),
+      ),
+    );
+  });
+
+  it("errore di caricamento con messaggio non stringa usa il messaggio di ripiego", async () => {
+    instradaFetch({
+      "/api/segnalazioni/s-err": () =>
+        Promise.resolve({ ok: false, status: 500, json: async () => ({ error: 42 }) } as unknown as Response),
+    });
+    renderForm({ segnalazioneId: "s-err" });
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Caricamento non riuscito",
+          description: "La segnalazione non è stata caricata.",
+        }),
+      ),
+    );
+  });
+
+  it("errore di caricamento con messaggio stringa mostra il messaggio del server", async () => {
+    instradaFetch({
+      "/api/segnalazioni/s-str": () => Promise.resolve(errorResponse(403, "Accesso negato alla segnalazione")),
+    });
+    renderForm({ segnalazioneId: "s-str" });
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ description: "Accesso negato alla segnalazione" }),
+      ),
+    );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Allegati: errori di caricamento, eliminazione e stati particolari
+// -----------------------------------------------------------------------------
+
+describe("FormSegnalazione - allegati con errori e stati particolari", () => {
+  it("upload con errore di rete non Error mostra il messaggio di connessione", async () => {
+    const user = userEvent.setup();
+    instradaFetch({
+      "/api/segnalazioni/s-rete": () =>
+        Promise.resolve(okResponse({ segnalazione: creaSegnalazione({ id: "s-rete" }) })),
+      "/api/upload": () => Promise.reject("Network error string"),
+    });
+    const { container } = renderForm({ segnalazioneId: "s-rete" });
+    await waitFor(() => expect(screen.getByDisplayValue("Via Test 1")).toBeInTheDocument());
+    await user.upload(inputFile(container), new File(["x"], "foto.jpg", { type: "image/jpeg" }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Connessione non riuscita",
+          description: "Verifica la connessione e riprova.",
+        }),
+      ),
+    );
+  });
+
+  it.each([
+    ["HTTP 400 con corpo JSON privo di error", () => rispostaErroreVuota(400)],
+    ["HTTP 500 con corpo non JSON", () => rispostaNonJson(false)],
+  ] as const)("upload con %s mostra il messaggio generico", async (_descrizione, risposta) => {
+    const user = userEvent.setup();
+    instradaFetch({
+      "/api/segnalazioni/s-up": () => Promise.resolve(okResponse({ segnalazione: creaSegnalazione({ id: "s-up" }) })),
+      "/api/upload": () => Promise.resolve(risposta()),
+    });
+    const { container } = renderForm({ segnalazioneId: "s-up" });
+    await waitFor(() => expect(screen.getByDisplayValue("Via Test 1")).toBeInTheDocument());
+    await user.upload(inputFile(container), new File(["x"], "foto.jpg", { type: "image/jpeg" }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Caricamento allegato non riuscito",
+          description: MESSAGGIO_GENERICO,
+          variant: "destructive",
+        }),
+      ),
+    );
+  });
+
+  it("una selezione file senza file non avvia alcun upload", async () => {
+    instradaFetch({
+      "/api/segnalazioni/s1": () => Promise.resolve(okResponse({ segnalazione: creaSegnalazione({ id: "s1" }) })),
+    });
+    const { container } = renderForm({ segnalazioneId: "s1" });
+    await waitFor(() => expect(screen.getByDisplayValue("Via Test 1")).toBeInTheDocument());
+    fireEvent.change(inputFile(container), { target: { files: [] } });
+    expect(mockFetch.mock.calls.some((c) => c[0] === "/api/upload")).toBe(false);
+  });
+
+  it("eliminazione con errore di rete non Error mostra il messaggio di connessione", async () => {
+    const user = userEvent.setup();
+    const seg = creaSegnalazione({ id: "s1", allegati: [allegatoDiProva("a-rete", "rete.jpg")] as never });
+    instradaFetch({
+      "/api/segnalazioni/s1": () => Promise.resolve(okResponse({ segnalazione: seg })),
+      "/api/allegati": () => Promise.reject("Network error"),
+    });
+    renderForm({ segnalazioneId: "s1" });
+    await waitFor(() => expect(screen.getByText("rete.jpg")).toBeInTheDocument());
+    await rispondiConfermaAllegato(user, "rete.jpg", "Elimina allegato");
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Connessione non riuscita",
+          description: "Verifica la connessione e riprova.",
+        }),
+      ),
+    );
+    expect(screen.getByText("rete.jpg")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["HTTP 403 con corpo JSON privo di error", () => rispostaErroreVuota(403)],
+    ["HTTP 500 con corpo non JSON", () => rispostaNonJson(false)],
+  ] as const)(
+    "eliminazione con %s mostra il messaggio generico e mantiene l'allegato",
+    async (_descrizione, risposta) => {
+      const user = userEvent.setup();
+      const seg = creaSegnalazione({ id: "s1", allegati: [allegatoDiProva("a-gen", "generico.jpg")] as never });
+      instradaFetch({
+        "/api/segnalazioni/s1": () => Promise.resolve(okResponse({ segnalazione: seg })),
+        "/api/allegati": () => Promise.resolve(risposta()),
+      });
+      renderForm({ segnalazioneId: "s1" });
+      await waitFor(() => expect(screen.getByText("generico.jpg")).toBeInTheDocument());
+      await rispondiConfermaAllegato(user, "generico.jpg", "Elimina allegato");
+      await waitFor(() =>
+        expect(toastSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            title: "Eliminazione non riuscita",
+            description: MESSAGGIO_GENERICO,
+            variant: "destructive",
+          }),
+        ),
+      );
+      expect(screen.getByText("generico.jpg")).toBeInTheDocument();
+    },
+  );
+
+  it("errore di eliminazione: il messaggio del server viene mostrato nel toast", async () => {
+    const user = userEvent.setup();
+    const seg = creaSegnalazione({ id: "s1", allegati: [allegatoDiProva("a-msg", "messaggio.jpg")] as never });
+    instradaFetch({
+      "/api/segnalazioni/s1": () => Promise.resolve(okResponse({ segnalazione: seg })),
+      "/api/allegati": () => Promise.resolve(errorResponse(403, "Non autorizzato")),
+    });
+    renderForm({ segnalazioneId: "s1" });
+    await waitFor(() => expect(screen.getByText("messaggio.jpg")).toBeInTheDocument());
+    await rispondiConfermaAllegato(user, "messaggio.jpg", "Elimina allegato");
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Eliminazione non riuscita", description: "Non autorizzato" }),
+      ),
+    );
+  });
+
+  it("l'Escape chiude la conferma di eliminazione allegato senza eliminare", async () => {
+    const user = userEvent.setup();
+    const seg = creaSegnalazione({ id: "s1", allegati: [allegatoDiProva("a-esc", "escape.jpg")] as never });
+    configuraFetch({ segnalazione: seg });
+    renderForm({ segnalazioneId: "s1" });
+    await waitFor(() => expect(screen.getByText("escape.jpg")).toBeInTheDocument());
+    vaiAlPasso("Allegati e invio");
+    await user.click(screen.getByRole("button", { name: /Elimina allegato/i }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(mockFetch.mock.calls.some((c) => String(c[0]).startsWith("/api/allegati"))).toBe(false);
+    expect(screen.getByText("escape.jpg")).toBeInTheDocument();
+  });
+
+  it("il tipo di allegato sconosciuto viene mostrato con il valore grezzo", async () => {
+    const seg = creaSegnalazione({
+      id: "s1",
+      allegati: [allegatoDiProva("a-raw", "grezzo.bin", "tipo-sconosciuto")] as never,
+    });
+    configuraFetch({ segnalazione: seg });
+    renderForm({ segnalazioneId: "s1" });
+    await waitFor(() => expect(screen.getByText("grezzo.bin")).toBeInTheDocument());
+    expect(screen.getByText("tipo-sconosciuto")).toBeInTheDocument();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Demo, GPS, salvataggio e segnalazioni collegate
+// -----------------------------------------------------------------------------
+
+describe("FormSegnalazione - demo, GPS e salvataggio con errori non Error", () => {
+  it("in demo la modifica non interroga il server", async () => {
+    isDemoMock.mockReturnValue(true);
+    renderForm({ segnalazioneId: "s1", user: creaUserDemo() });
+    await attendiEffetti();
+    expect(mockFetch).not.toHaveBeenCalledWith("/api/segnalazioni/s1");
+  });
+
+  it("in demo la recidiva non carica la segnalazione precedente", async () => {
+    isDemoMock.mockReturnValue(true);
+    renderForm({ segnalazionePrecedenteId: "prec", user: creaUserDemo() });
+    await attendiEffetti();
+    expect(mockFetch).not.toHaveBeenCalledWith("/api/segnalazioni/prec");
+  });
+
+  it("durante la rilevazione GPS il pulsante mostra lo stato di attesa", async () => {
+    const user = userEvent.setup();
+    geoGetCurrentPosition.mockImplementation(() => {});
+    renderForm();
+    await user.click(await screen.findByRole("button", { name: /Rileva posizione GPS/i }));
+    expect(screen.getByRole("button", { name: /Rilevazione in corso/i })).toBeInTheDocument();
+  });
+
+  it("salva con errore di rete non Error mostra il messaggio generico", async () => {
     const user = userEvent.setup();
     mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
       const u = typeof url === "string" ? url : url.toString();
       const method = init?.method ?? "GET";
       if (u.startsWith("/api/config/comuni")) return okResponse({ comuni: [creaComune()] });
       if (u === "/api/segnalazioni" && method === "POST") {
-        // Lancia un non-Error (stringa): copre il ramo false di
-        // `e instanceof Error` nel catch di salva().
         throw "errore di rete come stringa";
       }
       return okResponse({});
@@ -2502,65 +2650,275 @@ describe("FormSegnalazione - rami residui coverage 100%", () => {
     renderForm();
     await user.type(screen.getByLabelText("Indirizzo *"), "Via String Error 1");
     await user.click(screen.getByRole("button", { name: /Salva ed esci alla lista/i }));
-    await waitFor(() => {
+    await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Errore",
-          description: "Errore sconosciuto",
+          title: "Salvataggio non riuscito",
+          description: MESSAGGIO_GENERICO,
           variant: "destructive",
-        })
-      );
+        }),
+      ),
+    );
+  });
+
+  it("recidiva con errore di rete non Error non mostra il box recidiva", async () => {
+    instradaFetch({ "/api/segnalazioni/prec-str": () => Promise.reject("rete assente") });
+    renderForm({ segnalazionePrecedenteId: "prec-str" });
+    await attendiEffetti();
+    expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/prec-str");
+    expect(screen.queryByText("Segnalazione collegata per recidiva")).not.toBeInTheDocument();
+  });
+
+  it("selezione di un comune senza PEC né sindaco mostra PEC non configurata", async () => {
+    const user = userEvent.setup();
+    configuraFetch({ comuni: [creaComune({ nomeSindaco: null, pecComune: null })] });
+    renderForm();
+    await waitFor(() => expect(screen.getByText("Milano")).toBeInTheDocument());
+    await user.click(screen.getByText("Milano"));
+    await waitFor(() => expect(screen.getByText("Comune selezionato:")).toBeInTheDocument());
+    expect(screen.getByText(/non ancora configurata/i)).toBeInTheDocument();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Demo con segnalazione di prova e campo longitudine svuotato
+// -----------------------------------------------------------------------------
+
+describe("FormSegnalazione - demo con dati di prova e input numerici", () => {
+  it("in demo la modifica di una segnalazione di prova precarica i dati demo senza chiamare il server", async () => {
+    isDemoMock.mockReturnValue(true);
+    renderForm({ segnalazioneId: "demo-1", user: creaUserDemo() });
+    await waitFor(() => expect(screen.getByDisplayValue("Via dei Platani 4")).toBeInTheDocument());
+    expect(screen.getByDisplayValue("Capannone dismesso")).toBeInTheDocument();
+    expect(mockFetch).not.toHaveBeenCalledWith("/api/segnalazioni/demo-1");
+  });
+
+  it("svuotando la longitudine il campo resta vuoto e non viene inviato un valore numerico", async () => {
+    const user = userEvent.setup();
+    const seg = creaSegnalazione({ id: "s1", longitudine: 9.5 });
+    configuraFetch({ segnalazione: seg });
+    renderForm({ segnalazioneId: "s1" });
+    const lngInput = (await waitFor(() => screen.getByLabelText("Longitudine"))) as HTMLInputElement;
+    await waitFor(() => expect(lngInput.value).toBe("9.5"));
+    await user.clear(lngInput);
+    expect(lngInput.value).toBe("");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Passi, riepilogo errori e auto-salvataggio
+// -----------------------------------------------------------------------------
+
+describe("FormSegnalazione - passi, riepilogo errori e auto-salvataggio", () => {
+  const MESSAGGIO_INDIRIZZO = "Inserisci l'indirizzo della pratica per continuare.";
+
+  it("Continua non passa oltre senza indirizzo e collega l'errore al campo", async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await user.click(screen.getByRole("button", { name: "Continua" }));
+    expect((await screen.findAllByText(MESSAGGIO_INDIRIZZO)).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Indirizzo *")).toHaveAttribute("aria-invalid", "true");
+    // Resta sul primo passo: il precedente è disabilitato.
+    expect(screen.getByRole("button", { name: "Passo precedente" })).toBeDisabled();
+  });
+
+  it("Continua avanza di passo con l'indirizzo compilato e nell'ultimo passo non compare", async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await user.type(screen.getByLabelText("Indirizzo *"), "Via Roma 1");
+    await user.click(screen.getByRole("button", { name: "Continua" }));
+    expect(screen.getByRole("button", { name: "Passo precedente" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Continua" }));
+    expect(screen.getByRole("button", { name: "Passo precedente" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Continua" })).not.toBeInTheDocument();
+  });
+
+  it("il riepilogo errori porta al campo indirizzo e digitare cancella l'errore", async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await user.click(screen.getByRole("button", { name: /Salva ed esci alla lista/i }));
+    const collegamento = (await screen.findAllByRole("button", { name: MESSAGGIO_INDIRIZZO }))[0];
+    await user.click(collegamento);
+    const campo = screen.getByLabelText("Indirizzo *");
+    expect(campo).toHaveFocus();
+    await user.type(campo, "V");
+    await waitFor(() => {
+      expect(screen.queryAllByText(MESSAGGIO_INDIRIZZO)).toHaveLength(0);
     });
   });
 
-  it("eliminaAllegato con errore HTTP e JSON senza campo error (linea 353: data.error ?? Errore sconosciuto)", async () => {
-    // La DELETE ritorna 403 con body JSON vuoto {}: data.error è undefined,
-    // il ramo `?? "Errore sconosciuto"` viene triggerato.
-    const user = userEvent.setup();
-    const allegato = {
-      id: "a-noerr",
-      segnalazioneId: "s1",
-      tipo: "foto",
-      urlStorage: "/storage/noerr",
-      nomeOriginale: "noerr.jpg",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    };
-    const seg = creaSegnalazione({ id: "s1", allegati: [allegato as never] });
-    confirmSpy.mockReturnValue(true);
-    mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
-      const u = typeof url === "string" ? url : url.toString();
-      const method = init?.method ?? "GET";
-      if (u.startsWith("/api/config/comuni")) return okResponse({ comuni: [creaComune()] });
-      if (u.startsWith("/api/segnalazioni/")) return okResponse({ segnalazione: seg });
-      if (u.startsWith("/api/allegati") && method === "DELETE") {
-        // Risposta 403 con JSON vuoto (nessun campo error):
-        // copre il ramo `data.error ?? "Errore sconosciuto"`.
-        return {
-          ok: false,
-          status: 403,
-          json: async () => ({}),
-          text: async () => "",
-        } as unknown as Response;
-      }
-      return okResponse({});
+  it("la sola apertura della pratica non invia un PUT automatico", async () => {
+    configuraFetch({
+      segnalazione: creaSegnalazione({
+        id: "s-intatta",
+        cap: "20121",
+        destinatarioNome: "Sindaco",
+        oggettoPec: "Oggetto",
+        testoIntroduttivoPec: "Introduzione",
+      }),
     });
-    renderForm({ segnalazioneId: "s1" });
-    await waitFor(() => {
-      expect(screen.getByText("noerr.jpg")).toBeInTheDocument();
+    renderForm({ segnalazioneId: "s-intatta" });
+    await screen.findByDisplayValue("Via Test 1");
+    await screen.findByText("Comune selezionato:");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2150));
     });
-    const li = screen.getByText("noerr.jpg").closest("li");
-    const btn = li!.querySelector("button")!;
-    await user.click(btn);
-    await waitFor(() => {
-      expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          title: "Errore eliminazione",
-          description: "Errore sconosciuto",
-          variant: "destructive",
-        })
-      );
-    });
-    // L'allegato resta visibile (non rimosso)
-    expect(screen.getByText("noerr.jpg")).toBeInTheDocument();
+    expect(mockFetch.mock.calls.some((c) => c[0] === "/api/segnalazioni/s-intatta" && c[1]?.method === "PUT")).toBe(
+      false,
+    );
   });
+
+  it("l'auto-salvataggio aggiorna in silenzio una bozza esistente dopo una breve pausa", async () => {
+    configuraFetch({ segnalazione: creaSegnalazione({ id: "s-edit", indirizzoVia: "Via Auto 1" }) });
+    const user = userEvent.setup();
+    renderForm({ segnalazioneId: "s-edit" });
+    await user.type(await screen.findByDisplayValue("Via Auto 1"), " bis");
+    await waitFor(
+      () => {
+        expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/s-edit", expect.objectContaining({ method: "PUT" }));
+      },
+      { timeout: 4000 },
+    );
+    // Il salvataggio automatico non mostra il toast di conferma.
+    expect(toastSpy).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Bozza salvata" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Bozza salvata alle/)).toBeInTheDocument();
+    });
+  });
+
+  it("non avvia l'autosalvataggio senza il Comune obbligatorio", async () => {
+    configuraFetch({ segnalazione: creaSegnalazione({ id: "s-senza-comune", comuneId: null }) });
+    const user = userEvent.setup();
+    renderForm({ segnalazioneId: "s-senza-comune" });
+    await user.type(await screen.findByDisplayValue("Via Test 1"), " bis");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2150));
+    });
+    expect(
+      mockFetch.mock.calls.some((c) => c[0] === "/api/segnalazioni/s-senza-comune" && c[1]?.method === "PUT"),
+    ).toBe(false);
+  });
+
+  it("un errore dell'auto-salvataggio resta silenzioso e lo stato mostra come riprovare", async () => {
+    configuraFetch({ segnalazione: creaSegnalazione({ id: "s-edit", indirizzoVia: "Via Auto 2" }) });
+    const instradato = mockFetch.getMockImplementation() ?? (async () => okResponse({}));
+    mockFetch.mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return errorResponse(500, "Errore server");
+      return instradato(url, init);
+    });
+    const user = userEvent.setup();
+    renderForm({ segnalazioneId: "s-edit" });
+    await user.type(await screen.findByDisplayValue("Via Auto 2"), " bis");
+    await waitFor(
+      () => {
+        expect(screen.getByText("Salvataggio non riuscito. Usa Salva per riprovare.")).toBeInTheDocument();
+      },
+      { timeout: 4000 },
+    );
+    expect(toastSpy).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Salvataggio non riuscito" }));
+    const tentativi = mockFetch.mock.calls.filter((c) => c[1]?.method === "PUT").length;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2200));
+    });
+    expect(mockFetch.mock.calls.filter((c) => c[1]?.method === "PUT")).toHaveLength(tentativi);
+  });
+
+  it("svuotare l'indirizzo non avvia l'auto-salvataggio", async () => {
+    configuraFetch({ segnalazione: creaSegnalazione({ id: "s-edit", indirizzoVia: "Via Auto 3" }) });
+    const user = userEvent.setup();
+    renderForm({ segnalazioneId: "s-edit" });
+    await user.clear(await screen.findByDisplayValue("Via Auto 3"));
+    await act(async () => {
+      await new Promise((risolvi) => setTimeout(risolvi, 2300));
+    });
+    const invii = mockFetch.mock.calls.filter((c) => (c[1] as RequestInit | undefined)?.method === "PUT");
+    expect(invii).toHaveLength(0);
+  });
+});
+
+describe("FormSegnalazione - navigazione tra i passi", () => {
+  it("Passo precedente riporta al passo Luogo e cliccare il passo attivo lo lascia invariato", async () => {
+    const user = userEvent.setup();
+    renderForm();
+    await user.type(screen.getByLabelText("Indirizzo *"), "Via Roma 9");
+    await user.click(screen.getByRole("button", { name: "Continua" }));
+    expect(screen.getByRole("button", { name: "Passo precedente" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Passo precedente" }));
+    expect(screen.getByLabelText("Indirizzo *")).toHaveValue("Via Roma 9");
+    // Clic sul passo già attivo: nessun cambio di passo.
+    await user.click(screen.getByRole("button", { name: /Luogo/ }));
+    expect(screen.getByRole("button", { name: "Passo precedente" })).toBeDisabled();
+    expect(screen.getByLabelText("Indirizzo *")).toHaveValue("Via Roma 9");
+  });
+});
+
+describe("FormSegnalazione - indicazioni di compilazione", () => {
+  it("spiega che i campi contrassegnati con asterisco sono obbligatori", async () => {
+    configuraFetch({ comuni: [] });
+    renderForm();
+    await act(async () => {});
+    expect(screen.getByText(/sono obbligatori/)).toBeInTheDocument();
+  });
+
+  it("cita il testo cercato quando la ricerca del comune non trova nulla", async () => {
+    const user = userEvent.setup();
+    configuraFetch({ comuni: [] });
+    renderForm();
+    await user.type(screen.getByPlaceholderText("Cerca comune..."), "Xyz");
+    expect(await screen.findByText(/Nessun comune trovato per "Xyz"/)).toBeInTheDocument();
+  });
+
+  it("riporta il riferimento normativo nel dettaglio, fuori dall'etichetta della casella", async () => {
+    configuraFetch({ comuni: [] });
+    renderForm();
+    await act(async () => {});
+    const etichetta = screen.getByText(
+      "Elevati fenomeni di abbagliamento e pericolo per il traffico pedonale e stradale",
+    );
+    expect(etichetta.tagName).toBe("LABEL");
+    expect(etichetta.textContent).not.toContain("art. 23");
+    expect(screen.getByText("Vietati anche ai sensi dell'art. 23 del Codice della Strada.")).toBeInTheDocument();
+  });
+});
+
+describe("versioni delle risposte allegati", () => {
+  it.each([{}, { allegato: {} }])("non inserisce allegati da una risposta incompleta: %j", async (risposta) => {
+    const user = userEvent.setup();
+    instradaFetch({
+      "/api/segnalazioni/s1": () =>
+        Promise.resolve(okResponse({ segnalazione: creaSegnalazione({ id: "s1", updatedAt: undefined as never }) })),
+      "/api/upload": () => Promise.resolve(okResponse(risposta)),
+    });
+    const { container } = renderForm({ segnalazioneId: "s1" });
+    await waitFor(() => expect(screen.getByDisplayValue("Via Test 1")).toBeInTheDocument());
+    await user.upload(inputFile(container), new File(["x"], "foto.jpg", { type: "image/jpeg" }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Connessione non riuscita" })),
+    );
+  });
+  it.each([true, false])(
+    "recepisce la versione allegato prima della cancellazione, JSON valido: %s",
+    async (jsonValido) => {
+      const user = userEvent.setup();
+      const versione = "2026-01-01T00:00:00.123Z";
+      instradaFetch({
+        "/api/segnalazioni/s1": () =>
+          Promise.resolve(okResponse({ segnalazione: creaSegnalazione({ id: "s1", updatedAt: undefined as never }) })),
+        "/api/upload": () =>
+          Promise.resolve(
+            okResponse({ allegato: allegatoDiProva("a1", "foto.jpg"), updatedAt: jsonValido ? versione : undefined }),
+          ),
+        "/api/allegati": () =>
+          Promise.resolve(jsonValido ? okResponse({ ok: true, updatedAt: versione }) : rispostaNonJson(true)),
+      });
+      const { container } = renderForm({ segnalazioneId: "s1" });
+      await waitFor(() => expect(screen.getByDisplayValue("Via Test 1")).toBeInTheDocument());
+      await user.upload(inputFile(container), new File(["x"], "foto.jpg", { type: "image/jpeg" }));
+      await waitFor(() => expect(screen.getByText("foto.jpg")).toBeInTheDocument());
+      await rispondiConfermaAllegato(user, "foto.jpg", "Elimina allegato");
+      await waitFor(() => expect(screen.queryByText("foto.jpg")).not.toBeInTheDocument());
+      const chiamata = mockFetch.mock.calls.find(([url]) => String(url).startsWith("/api/allegati"));
+      expect(chiamata?.[1]?.headers).toEqual(jsonValido ? { "If-Match": JSON.stringify(versione) } : undefined);
+    },
+  );
 });

@@ -6,10 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {
-  Button,
-  buttonVariants,
-} from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge, badgeVariants } from "@/components/ui/badge";
 import {
   Card,
@@ -43,11 +40,11 @@ describe("Button", () => {
     const { container } = render(
       <Button variant="destructive" size="lg">
         Delete
-      </Button>
+      </Button>,
     );
     const btn = container.querySelector("button");
     expect(btn?.className).toContain("bg-destructive");
-    expect(btn?.className).toContain("h-10");
+    expect(btn?.className).toContain("h-11");
   });
 
   it("inoltra onClick handler", async () => {
@@ -62,7 +59,7 @@ describe("Button", () => {
     render(
       <Button asChild>
         <a href="/test">Link Button</a>
-      </Button>
+      </Button>,
     );
     const link = screen.getByRole("link", { name: "Link Button" });
     expect(link).toBeInTheDocument();
@@ -72,7 +69,7 @@ describe("Button", () => {
   it("buttonVariants ritorna stringa di classi", () => {
     const cls = buttonVariants({ variant: "outline", size: "sm" });
     expect(cls).toContain("border");
-    expect(cls).toContain("h-8");
+    expect(cls).toContain("h-9");
   });
 
   it("disabled prop disabilita il button", () => {
@@ -81,9 +78,7 @@ describe("Button", () => {
   });
 
   it("accetta className personalizzata", () => {
-    const { container } = render(
-      <Button className="custom-class">Test</Button>
-    );
+    const { container } = render(<Button className="custom-class">Test</Button>);
     expect(container.querySelector("button")?.className).toContain("custom-class");
   });
 });
@@ -100,23 +95,17 @@ describe("Badge", () => {
   });
 
   it("applica variante personalizzata", () => {
-    const { container } = render(
-      <Badge variant="destructive">Error</Badge>
-    );
+    const { container } = render(<Badge variant="destructive">Error</Badge>);
     expect(container.firstChild).toHaveClass("bg-destructive");
   });
 
   it("applica variante outline", () => {
-    const { container } = render(
-      <Badge variant="outline">Outlined</Badge>
-    );
+    const { container } = render(<Badge variant="outline">Outlined</Badge>);
     expect(container.firstChild).toHaveClass("text-foreground");
   });
 
   it("applica variante secondary", () => {
-    const { container } = render(
-      <Badge variant="secondary">Secondary</Badge>
-    );
+    const { container } = render(<Badge variant="secondary">Secondary</Badge>);
     expect(container.firstChild).toHaveClass("bg-secondary");
   });
 
@@ -124,7 +113,7 @@ describe("Badge", () => {
     render(
       <Badge asChild>
         <a href="/test">Link Badge</a>
-      </Badge>
+      </Badge>,
     );
     const link = screen.getByRole("link", { name: "Link Badge" });
     expect(link).toBeInTheDocument();
@@ -143,9 +132,7 @@ describe("Badge", () => {
   });
 
   it("accetta className personalizzata", () => {
-    const { container } = render(
-      <Badge className="custom-badge">Test</Badge>
-    );
+    const { container } = render(<Badge className="custom-badge">Test</Badge>);
     expect(container.firstChild).toHaveClass("custom-badge");
   });
 });
@@ -160,7 +147,7 @@ describe("Card e sub-componenti", () => {
         </CardHeader>
         <CardContent>Contenuto</CardContent>
         <CardFooter>Footer</CardFooter>
-      </Card>
+      </Card>,
     );
     expect(screen.getByText("Titolo")).toBeInTheDocument();
     expect(screen.getByText("Descrizione")).toBeInTheDocument();
@@ -222,10 +209,8 @@ describe("Checkbox", () => {
   it("inoltra onClick handler", async () => {
     const user = userEvent.setup();
     let clicked = false;
-    const { container } = render(
-      <Checkbox onClick={() => (clicked = true)} />
-    );
-    await user.click(container.querySelector("button")!);
+    const { container } = render(<Checkbox onClick={() => (clicked = true)} />);
+    await user.click(container.querySelector("button") as HTMLButtonElement);
     expect(clicked).toBe(true);
   });
 
@@ -294,10 +279,8 @@ describe("Switch", () => {
   it("inoltra onClick", async () => {
     const user = userEvent.setup();
     let clicked = false;
-    const { container } = render(
-      <Switch onClick={() => (clicked = true)} />
-    );
-    await user.click(container.querySelector("button")!);
+    const { container } = render(<Switch onClick={() => (clicked = true)} />);
+    await user.click(container.querySelector("button") as HTMLButtonElement);
     expect(clicked).toBe(true);
   });
 });
@@ -312,7 +295,7 @@ describe("Tabs", () => {
         </TabsList>
         <TabsContent value="a">Contenuto A</TabsContent>
         <TabsContent value="b">Contenuto B</TabsContent>
-      </Tabs>
+      </Tabs>,
     );
     expect(screen.getByText("Contenuto A")).toBeInTheDocument();
     expect(screen.getByText("Tab A")).toBeInTheDocument();
@@ -329,7 +312,7 @@ describe("Tabs", () => {
         </TabsList>
         <TabsContent value="a">Contenuto A</TabsContent>
         <TabsContent value="b">Contenuto B</TabsContent>
-      </Tabs>
+      </Tabs>,
     );
     await user.click(screen.getByText("Tab B"));
     expect(screen.getByText("Contenuto B")).toBeInTheDocument();

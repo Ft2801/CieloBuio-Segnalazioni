@@ -3,29 +3,76 @@
  * Autore: Fabio Tempera (2026)
  */
 
-export type RuoloUtente =
-  | "volontario"
-  | "referente_provinciale"
-  | "referente_regionale"
-  | "admin";
+export type RuoloUtente = "volontario" | "referente_provinciale" | "referente_regionale" | "admin";
 
 export type StatoSegnalazione =
-  | "bozza"
-  | "in_revisione"
-  | "approvata"
-  | "inviata"
-  | "in_attesa"
-  | "chiusa_positiva"
-  | "chiusa_negativa";
+  "bozza" | "in_revisione" | "approvata" | "inviata" | "in_attesa" | "chiusa_positiva" | "chiusa_negativa";
 
-export const STATI_SEGNALAZIONE: { value: StatoSegnalazione; label: string; colore: string; descrizione: string }[] = [
-  { value: "bozza", label: "Bozza", colore: "bg-slate-500", descrizione: "Creata dal volontario, non ancora inviata al referente" },
-  { value: "in_revisione", label: "In revisione", colore: "bg-amber-500", descrizione: "Inviata al referente territoriale per approvazione" },
-  { value: "approvata", label: "Approvata", colore: "bg-blue-500", descrizione: "Approvata dal referente, pronta per l'invio PEC" },
-  { value: "inviata", label: "Inviata", colore: "bg-emerald-600", descrizione: "PEC inviata al Comune (e ARPA se richiesto)" },
-  { value: "in_attesa", label: "In attesa", colore: "bg-cyan-600", descrizione: "In attesa di risposta dall'amministrazione" },
-  { value: "chiusa_positiva", label: "Chiusa positiva", colore: "bg-green-700", descrizione: "Impianto adeguato" },
-  { value: "chiusa_negativa", label: "Chiusa negativa", colore: "bg-rose-700", descrizione: "Nessun adeguamento, valutare escalation" },
+/**
+ * Stati della segnalazione. Ogni stato ha:
+ * - `badge`: classi per l'etichetta di stato (testo scuro su sfondo chiaro,
+ *   contrasto >= 4.5:1 secondo WCAG 2.2 AA; il colore non è l'unico
+ *   indicatore perché l'etichetta è sempre scritta per esteso);
+ * - `punto`: colore pieno per i piccoli indicatori grafici (contrasto >= 3:1
+ *   su bianco, WCAG 1.4.11 per i componenti non testuali).
+ */
+export const STATI_SEGNALAZIONE: {
+  value: StatoSegnalazione;
+  label: string;
+  badge: string;
+  punto: string;
+  descrizione: string;
+}[] = [
+  {
+    value: "bozza",
+    label: "Bozza",
+    badge: "bg-slate-100 text-slate-800 ring-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600",
+    punto: "bg-slate-500",
+    descrizione: "Creata dal volontario, non ancora inviata al referente",
+  },
+  {
+    value: "in_revisione",
+    label: "In revisione",
+    badge: "bg-amber-100 text-amber-900 ring-amber-300 dark:bg-amber-950 dark:text-amber-100 dark:ring-amber-800",
+    punto: "bg-amber-600",
+    descrizione: "Inviata al referente territoriale per approvazione",
+  },
+  {
+    value: "approvata",
+    label: "Approvata",
+    badge: "bg-blue-100 text-blue-900 ring-blue-300 dark:bg-blue-950 dark:text-blue-100 dark:ring-blue-800",
+    punto: "bg-blue-700",
+    descrizione: "Approvata dal referente, pronta per l'invio PEC",
+  },
+  {
+    value: "inviata",
+    label: "Inviata",
+    badge:
+      "bg-emerald-100 text-emerald-900 ring-emerald-300 dark:bg-emerald-950 dark:text-emerald-100 dark:ring-emerald-800",
+    punto: "bg-emerald-700",
+    descrizione: "PEC inviata al Comune (e ARPA se richiesto)",
+  },
+  {
+    value: "in_attesa",
+    label: "In attesa",
+    badge: "bg-cyan-100 text-cyan-900 ring-cyan-300 dark:bg-cyan-950 dark:text-cyan-100 dark:ring-cyan-800",
+    punto: "bg-cyan-700",
+    descrizione: "In attesa di risposta dall'amministrazione",
+  },
+  {
+    value: "chiusa_positiva",
+    label: "Chiusa con esito positivo",
+    badge: "bg-green-100 text-green-900 ring-green-300 dark:bg-green-950 dark:text-green-100 dark:ring-green-800",
+    punto: "bg-green-700",
+    descrizione: "Impianto adeguato",
+  },
+  {
+    value: "chiusa_negativa",
+    label: "Chiusa con esito negativo",
+    badge: "bg-rose-100 text-rose-900 ring-rose-300 dark:bg-rose-950 dark:text-rose-100 dark:ring-rose-800",
+    punto: "bg-rose-700",
+    descrizione: "Nessun adeguamento: è possibile creare una segnalazione collegata per recidiva",
+  },
 ];
 
 export function labelStato(stato: string): string {
@@ -61,8 +108,17 @@ export const TRANSIZIONI_LECITE: Record<StatoSegnalazione, StatoSegnalazione[]> 
   chiusa_negativa: ["in_attesa"],
 };
 
+/** Classi Tailwind per l'etichetta di stato (testo e sfondo a contrasto AA). */
 export function coloreStato(stato: string): string {
-  return STATI_SEGNALAZIONE.find((s) => s.value === stato)?.colore ?? "bg-slate-500";
+  return (
+    STATI_SEGNALAZIONE.find((s) => s.value === stato)?.badge ??
+    "bg-slate-100 text-slate-800 ring-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600"
+  );
+}
+
+/** Classe del punto colorato che accompagna lo stato nei grafici e nelle timeline. */
+export function puntoStato(stato: string): string {
+  return STATI_SEGNALAZIONE.find((s) => s.value === stato)?.punto ?? "bg-slate-500";
 }
 
 /**
@@ -154,7 +210,7 @@ export type Segnalazione = {
   livelloRecidiva: number;
   createdAt: string;
   updatedAt: string;
-  comune?: { id: number; nome: string; pecComune: string; nomeSindaco: string | null } | null;
+  comune?: { id: number; nome: string; cap?: string; pecComune: string; nomeSindaco: string | null } | null;
   provincia?: { id: number; sigla: string; nome: string } | null;
   regione?: { id: number; regione: string; riferimentoLegge: string } | null;
   // volontario è nullable per supportare le segnalazioni anonimizzate

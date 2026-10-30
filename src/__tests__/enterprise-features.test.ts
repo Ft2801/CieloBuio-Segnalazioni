@@ -7,9 +7,16 @@
  * - TOTP (2FA)
  * - Backup encryption
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
-import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
+import pkg from "../../package.json";
+import { randomBytes } from "crypto";
+import { cifra, decifra, ErroreBackup } from "@/lib/backup";
+
+// Ripristina le variabili d'ambiente anche se un test fallisce a metà.
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 vi.mock("@/lib/db", () => ({
   db: {
@@ -26,10 +33,11 @@ const { mockGetSessionUser } = vi.hoisted(() => ({
 vi.mock("@/lib/auth", () => ({
   getSessionUser: mockGetSessionUser,
   canManageConfiguration: (user: { ruolo: string }) => user.ruolo === "admin",
-  canReviewSegnalazioni: (user: { ruolo: string }) => ["admin", "referente_provinciale", "referente_regionale"].includes(user.ruolo),
+  canReviewSegnalazioni: (user: { ruolo: string }) =>
+    ["admin", "referente_provinciale", "referente_regionale"].includes(user.ruolo),
   // Necessario per la route /api/docs che legge dinamicamente il nome
   // del cookie di sessione in base a NODE_ENV
-  getSessionCookieName: () => process.env.NODE_ENV === "production" ? "__Host-cb_session" : "cb_session",
+  getSessionCookieName: () => (process.env.NODE_ENV === "production" ? "__Host-cb_session" : "cb_session"),
   timingSafeEqualStrings: (a: string, b: string) => a === b,
 }));
 
@@ -48,12 +56,7 @@ import { GET as DocsGET } from "@/app/api/docs/route";
 import { GET as MetricsGET } from "@/app/api/metrics/route";
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import {
-  generateTotpSecret,
-  createTotp,
-  generateTotpUri,
-  verifyTotp,
-} from "@/lib/totp";
+import { generateTotpSecret, createTotp, generateTotpUri, verifyTotp } from "@/lib/totp";
 
 // ============================================================
 // Health check
@@ -65,18 +68,19 @@ describe("[Health Check] GET /api/health", () => {
   });
 
   it("ritorna 200 con status ok quando il database è connesso", async () => {
-    vi.mocked(db.$queryRaw).mockResolvedValue([1] as any);
+    vi.mocked(db.$queryRaw).mockResolvedValue([1] as never);
     const res = await HealthGET();
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.status).toBe("ok");
     expect(json.database).toBe("connected");
     expect(json.service).toBe("cielobuio-segnalazioni");
-    expect(json.version).toBe("1.0.0");
+    expect(json.version).toBe(pkg.version);
     expect(json.latencyMs).toBeGreaterThanOrEqual(0);
     expect(json.timestamp).toBeTruthy();
-    expect(json.uptime).toBeGreaterThanOrEqual(0);
-    expect(json.environment).toBeTruthy();
+    // Dati di runtime non esposti pubblicamente.
+    expect(json).not.toHaveProperty("uptime");
+    expect(json).not.toHaveProperty("environment");
   });
 
   it("ritorna 503 con status error quando il database non è raggiungibile", async () => {
@@ -90,7 +94,7 @@ describe("[Health Check] GET /api/health", () => {
   });
 
   it("ritorna 503 anche con errore non-Error (stringa)", async () => {
-    vi.mocked(db.$queryRaw).mockRejectedValue("DB timeout string" as any);
+    vi.mocked(db.$queryRaw).mockRejectedValue("DB timeout string" as never);
     const res = await HealthGET();
     expect(res.status).toBe(503);
     const json = await res.json();
@@ -173,26 +177,40 @@ describe("[OpenAPI] GET /api/docs", () => {
 
 describe("[Metrics] GET /api/metrics", () => {
   const adminUser = {
-    id: "adm-1", email: "a@t.it", nomeCognome: "Admin",
-    ruolo: "admin" as const, provinciaId: null, regioneId: null,
-    inizialiProtocollo: null, pec: null, emailOrdinaria: null,
-    indirizzo: null, firma: null,
+    id: "adm-1",
+    email: "a@t.it",
+    nomeCognome: "Admin",
+    ruolo: "admin" as const,
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: null,
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
   };
   const volUser = {
-    id: "vol-1", email: "v@t.it", nomeCognome: "Vol",
-    ruolo: "volontario" as const, provinciaId: null, regioneId: null,
-    inizialiProtocollo: null, pec: null, emailOrdinaria: null,
-    indirizzo: null, firma: null,
+    id: "vol-1",
+    email: "v@t.it",
+    nomeCognome: "Vol",
+    ruolo: "volontario" as const,
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: null,
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
   };
 
   beforeEach(() => {
     mockGetSessionUser.mockReset();
   });
 
-  it("ritorna 403 senza autenticazione", async () => {
+  it("ritorna 401 senza autenticazione", async () => {
     mockGetSessionUser.mockResolvedValue(null);
     const res = await MetricsGET(new NextRequest("http://localhost/api/metrics"));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it("ritorna 403 per utente non admin", async () => {
@@ -201,13 +219,13 @@ describe("[Metrics] GET /api/metrics", () => {
     expect(res.status).toBe(403);
   });
 
-  it("ritorna 403 con token errato (modalità Prometheus)", async () => {
+  it("ritorna 401 con token errato (modalità Prometheus)", async () => {
     vi.stubEnv("METRICS_TOKEN", "valid-token-xyz");
     const req = new NextRequest("http://localhost/api/metrics", {
       headers: { authorization: "Bearer wrong-token" },
     });
     const res = await MetricsGET(req);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     vi.unstubAllEnvs();
   });
 
@@ -231,33 +249,33 @@ describe("[Metrics] GET /api/metrics", () => {
     vi.unstubAllEnvs();
   });
 
-  it("ritorna 403 con token via query param (?token=)", async () => {
+  it("ritorna 401 con token via query param (?token=)", async () => {
     // Verifica il ramo in cui l'header Authorization manca o non è Bearer,
     // e il token viene fornito via query string: l'endpoint lo rifiuta per sicurezza.
     vi.stubEnv("METRICS_TOKEN", "valid-token-xyz");
     const req = new NextRequest("http://localhost/api/metrics?token=valid-token-xyz");
     const res = await MetricsGET(req);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     vi.unstubAllEnvs();
   });
 
-  it("ritorna 403 con Authorization header non Bearer (es. Basic)", async () => {
+  it("ritorna 401 con Authorization header non Bearer (es. Basic)", async () => {
     vi.stubEnv("METRICS_TOKEN", "valid-token-xyz");
     const req = new NextRequest("http://localhost/api/metrics", {
       headers: { authorization: "Basic dXNlcjpwYXNz" },
     });
     const res = await MetricsGET(req);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
     vi.unstubAllEnvs();
   });
 
-  it("ritorna 403 se nessun token fornito in modalità Prometheus", async () => {
+  it("ritorna 401 con challenge Bearer se nessun token fornito in modalità Prometheus", async () => {
     vi.stubEnv("METRICS_TOKEN", "valid-token-xyz");
     // Nessun header Authorization, nessun ?token=
     const req = new NextRequest("http://localhost/api/metrics");
     const res = await MetricsGET(req);
-    expect(res.status).toBe(403);
-    vi.unstubAllEnvs();
+    expect(res.status).toBe(401);
+    expect(res.headers.get("WWW-Authenticate")).toContain("Bearer");
   });
 
   it("contiene metriche di memoria e CPU per admin", async () => {
@@ -352,7 +370,15 @@ describe("[TOTP] Autenticazione a due fattori", () => {
 
   it("verifyTotp ritorna false per un codice TOTP non valido", () => {
     const secret = generateTotpSecret("user@test.it");
-    expect(verifyTotp("000000", secret)).toBe(false);
+    // Codice deterministico non valido: si sceglie un valore diverso da
+    // quelli accettati nella finestra ±1 step (RFC 6238), così il test non
+    // dipende dal caso e non può passare per una collisione.
+    const totp = createTotp("user@test.it", secret);
+    const ora = Date.now();
+    const accettati = new Set([-1, 0, 1].map((d) => totp.generate({ timestamp: ora + d * 30_000 })));
+    let nonValido = 0;
+    while (accettati.has(String(nonValido).padStart(6, "0"))) nonValido++;
+    expect(verifyTotp(String(nonValido).padStart(6, "0"), secret)).toBe(false);
     expect(verifyTotp("invalid", secret)).toBe(false);
     expect(verifyTotp("", secret)).toBe(false);
     expect(verifyTotp("123456", "")).toBe(false);
@@ -379,41 +405,34 @@ describe("[TOTP] Autenticazione a due fattori", () => {
 // Backup Encryption
 // ============================================================
 
-describe("[Backup Encryption] AES-256-GCM", () => {
+describe("[Backup Encryption] AES-256-GCM (cifra e decifra di src/lib/backup.ts)", () => {
   it("la cifratura e decifratura round-trip preserva i dati", () => {
     const key = randomBytes(32);
     const plaintext = Buffer.from('{"test":"data","secret":"value"}', "utf-8");
-
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", key, iv);
-    const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    const authTag = cipher.getAuthTag();
-    const encryptedBuffer = Buffer.concat([iv, encrypted, authTag]);
-
-    const decIv = encryptedBuffer.subarray(0, 12);
-    const decAuthTag = encryptedBuffer.subarray(encryptedBuffer.length - 16);
-    const decEncrypted = encryptedBuffer.subarray(12, encryptedBuffer.length - 16);
-    const decipher = createDecipheriv("aes-256-gcm", key, decIv);
-    decipher.setAuthTag(decAuthTag);
-    const decrypted = Buffer.concat([decipher.update(decEncrypted), decipher.final()]);
-
-    expect(decrypted.toString("utf-8")).toBe(plaintext.toString("utf-8"));
+    const cifrato = cifra(plaintext, key);
+    expect(cifrato.length).toBe(plaintext.length + 12 + 16);
+    expect(decifra(cifrato, key).equals(plaintext)).toBe(true);
   });
 
-  it("la decifratura con auth tag sbagliato fallisce", () => {
+  it("produce un IV casuale: due cifrature dello stesso testo differiscono", () => {
     const key = randomBytes(32);
-    const plaintext = Buffer.from("test data", "utf-8");
+    const plaintext = Buffer.from("stesso testo", "utf-8");
+    expect(cifra(plaintext, key).equals(cifra(plaintext, key))).toBe(false);
+  });
 
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", key, iv);
-    const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  it("la decifratura con chiave sbagliata fallisce", () => {
+    const cifrato = cifra(Buffer.from("test data", "utf-8"), randomBytes(32));
+    expect(() => decifra(cifrato, randomBytes(32))).toThrow();
+  });
 
-    const wrongAuthTag = randomBytes(16);
-    const decipher = createDecipheriv("aes-256-gcm", key, iv);
-    decipher.setAuthTag(wrongAuthTag);
+  it("un file alterato viene rifiutato dal tag di autenticazione", () => {
+    const key = randomBytes(32);
+    const cifrato = cifra(Buffer.from("dati di backup", "utf-8"), key);
+    cifrato[14] ^= 0xff;
+    expect(() => decifra(cifrato, key)).toThrow();
+  });
 
-    expect(() => {
-      Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    }).toThrow();
+  it("un file più corto di IV e auth tag viene rifiutato con ErroreBackup", () => {
+    expect(() => decifra(Buffer.alloc(27), randomBytes(32))).toThrow(ErroreBackup);
   });
 });

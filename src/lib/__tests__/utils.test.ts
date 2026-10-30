@@ -50,6 +50,19 @@ describe("DEMO_STATS", () => {
     expect(DEMO_STATS).toHaveProperty("inAttesaOverdue");
   });
 
+  it("i conteggi coincidono con le segnalazioni demo (la dashboard usa DEMO_STATS)", () => {
+    const conta = (stato: string) => DEMO_SEGNALAZIONI.filter((s) => s.stato === stato).length;
+    expect(DEMO_STATS.totali).toBe(DEMO_SEGNALAZIONI.length);
+    expect(DEMO_STATS.bozze).toBe(conta("bozza"));
+    expect(DEMO_STATS.inRevisione).toBe(conta("in_revisione"));
+    expect(DEMO_STATS.approvate).toBe(conta("approvata"));
+    expect(DEMO_STATS.inviate).toBe(conta("inviata"));
+    expect(DEMO_STATS.inAttesa).toBe(conta("in_attesa"));
+    expect(DEMO_STATS.chiusePositive).toBe(conta("chiusa_positiva"));
+    expect(DEMO_STATS.chiuseNegative).toBe(conta("chiusa_negativa"));
+    expect(DEMO_STATS.recidive).toBe(DEMO_SEGNALAZIONI.filter((s) => s.livelloRecidiva >= 2).length);
+  });
+
   it("i valori sono numeri", () => {
     for (const val of Object.values(DEMO_STATS)) {
       expect(typeof val).toBe("number");

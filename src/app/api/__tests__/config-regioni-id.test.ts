@@ -31,20 +31,31 @@ import { db } from "@/lib/db";
 import { PUT, DELETE } from "@/app/api/config/regioni/[id]/route";
 
 const ADMIN_SESSION = {
-  id: "s1", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s1",
+  token: "tok",
+  scadenza: new Date(Date.now() + 10000),
   user: {
-    id: "u1", email: "a@t.it", nomeCognome: "Admin", ruolo: "admin",
-    provinciaId: null, regioneId: null, inizialiProtocollo: "AD",
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true,
+    id: "u1",
+    email: "a@t.it",
+    nomeCognome: "Admin",
+    ruolo: "admin",
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: "AD",
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
+    attivo: true,
   },
 };
 
 function mockCookiesFor(user: typeof ADMIN_SESSION | null) {
   vi.mocked(cookies).mockResolvedValue({
     get: () => (user ? { value: "tok" } : undefined),
-  } as any);
+  } as never);
   if (user) {
-    vi.mocked(db.sessione.findUnique).mockResolvedValue(user as any);
+    vi.mocked(db.sessione.findUnique).mockResolvedValue(user as never);
   } else {
     vi.mocked(db.sessione.findUnique).mockResolvedValue(null);
   }
@@ -61,38 +72,47 @@ function makeReq(method: string, body?: unknown): NextRequest {
 describe("PUT /api/config/regioni/[id]", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("ritorna 403 se non admin", async () => {
+  it("ritorna 401 se non autenticato", async () => {
     mockCookiesFor(null);
     const res = await PUT(makeReq("PUT", { regione: "X" }), { params: Promise.resolve({ id: "1" }) });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it("ritorna 404 se regione non trovata", async () => {
     mockCookiesFor(ADMIN_SESSION);
     vi.mocked(db.regioneLegge.findUnique).mockResolvedValue(null);
-    const res = await PUT(makeReq("PUT", { regione: "X", riferimentoLegge: "Y", pecArpaRegionale: "" }), { params: Promise.resolve({ id: "1" }) });
+    const res = await PUT(makeReq("PUT", { regione: "X", riferimentoLegge: "Y", pecArpaRegionale: "" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
     expect(res.status).toBe(404);
   });
 
   it("aggiorna regione valida ritorna 200", async () => {
     mockCookiesFor(ADMIN_SESSION);
-    vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({ id: 1, regione: "LOM" } as any);
-    vi.mocked(db.regioneLegge.update).mockResolvedValue({ id: 1, regione: "LOMBARDIA" } as any);
-    const res = await PUT(makeReq("PUT", { regione: "LOMBARDIA", riferimentoLegge: "L.R.", pecArpaRegionale: "" }), { params: Promise.resolve({ id: "1" }) });
+    vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({ id: 1, regione: "LOM" } as never);
+    vi.mocked(db.regioneLegge.update).mockResolvedValue({ id: 1, regione: "LOMBARDIA" } as never);
+    const res = await PUT(makeReq("PUT", { regione: "LOMBARDIA", riferimentoLegge: "L.R.", pecArpaRegionale: "" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
     expect(res.status).toBe(200);
+    expect(db.regioneLegge.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 1 }, data: expect.objectContaining({ regione: "LOMBARDIA" }) }),
+    );
   });
 
   it("ritorna 500 su errore DB", async () => {
     mockCookiesFor(ADMIN_SESSION);
-    vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({ id: 1 } as any);
+    vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({ id: 1 } as never);
     vi.mocked(db.regioneLegge.update).mockRejectedValue(new Error("DB error"));
-    const res = await PUT(makeReq("PUT", { regione: "LOM", riferimentoLegge: "L.R.", pecArpaRegionale: "" }), { params: Promise.resolve({ id: "1" }) });
+    const res = await PUT(makeReq("PUT", { regione: "LOM", riferimentoLegge: "L.R.", pecArpaRegionale: "" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
     expect(res.status).toBe(500);
   });
 
   it("ritorna 400 se validazione fallisce", async () => {
     mockCookiesFor(ADMIN_SESSION);
-    vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({ id: 1 } as any);
+    vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({ id: 1 } as never);
     const res = await PUT(makeReq("PUT", { regione: "" }), { params: Promise.resolve({ id: "1" }) });
     expect(res.status).toBe(400);
   });
@@ -121,10 +141,10 @@ describe("DELETE /api/config/regioni/[id]", () => {
     expect(json.error).toContain("ID non valido");
   });
 
-  it("ritorna 403 se non admin", async () => {
+  it("ritorna 401 se non autenticato", async () => {
     mockCookiesFor(null);
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it("ritorna 404 se regione non trovata", async () => {
@@ -137,9 +157,10 @@ describe("DELETE /api/config/regioni/[id]", () => {
   it("ritorna 400 se ci sono province collegate", async () => {
     mockCookiesFor(ADMIN_SESSION);
     vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({
-      id: 1, regione: "LOM",
+      id: 1,
+      regione: "LOM",
       _count: { province: 3, segnalazioni: 0 },
-    } as any);
+    } as never);
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
     expect(res.status).toBe(400);
   });
@@ -147,9 +168,10 @@ describe("DELETE /api/config/regioni/[id]", () => {
   it("ritorna 400 se ci sono segnalazioni collegate", async () => {
     mockCookiesFor(ADMIN_SESSION);
     vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({
-      id: 1, regione: "LOM",
+      id: 1,
+      regione: "LOM",
       _count: { province: 0, segnalazioni: 5 },
-    } as any);
+    } as never);
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
     expect(res.status).toBe(400);
   });
@@ -157,9 +179,10 @@ describe("DELETE /api/config/regioni/[id]", () => {
   it("ritorna 400 se ci sono referenti regionali assegnati", async () => {
     mockCookiesFor(ADMIN_SESSION);
     vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({
-      id: 1, regione: "LOM",
+      id: 1,
+      regione: "LOM",
       _count: { province: 0, segnalazioni: 0 },
-    } as any);
+    } as never);
     vi.mocked(db.user.count).mockResolvedValue(2);
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
     expect(res.status).toBe(400);
@@ -168,24 +191,36 @@ describe("DELETE /api/config/regioni/[id]", () => {
   it("elimina regione valida ritorna 200", async () => {
     mockCookiesFor(ADMIN_SESSION);
     vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({
-      id: 1, regione: "LOM",
+      id: 1,
+      regione: "LOM",
       _count: { province: 0, segnalazioni: 0 },
-    } as any);
+    } as never);
     vi.mocked(db.user.count).mockResolvedValue(0);
-    vi.mocked(db.regioneLegge.delete).mockResolvedValue({} as any);
+    vi.mocked(db.regioneLegge.delete).mockResolvedValue({} as never);
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
     expect(res.status).toBe(200);
+    expect(db.regioneLegge.delete).toHaveBeenCalledWith({ where: { id: 1 } });
   });
 
   it("ritorna 500 su errore DB", async () => {
     mockCookiesFor(ADMIN_SESSION);
     vi.mocked(db.regioneLegge.findUnique).mockResolvedValue({
-      id: 1, regione: "LOM",
+      id: 1,
+      regione: "LOM",
       _count: { province: 0, segnalazioni: 0 },
-    } as any);
+    } as never);
     vi.mocked(db.user.count).mockResolvedValue(0);
     vi.mocked(db.regioneLegge.delete).mockRejectedValue(new Error("DB error"));
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
     expect(res.status).toBe(500);
+  });
+});
+
+describe("autorizzazione: sessione senza permessi di configurazione", () => {
+  it("ritorna 403 a un volontario su PUT e DELETE", async () => {
+    mockCookiesFor({ ...ADMIN_SESSION, user: { ...ADMIN_SESSION.user, ruolo: "volontario" } } as typeof ADMIN_SESSION);
+    const ctx = { params: Promise.resolve({ id: "1" }) };
+    expect((await PUT(makeReq("PUT", {}), ctx)).status).toBe(403);
+    expect((await DELETE(makeReq("DELETE"), ctx)).status).toBe(403);
   });
 });

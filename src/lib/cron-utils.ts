@@ -3,29 +3,16 @@
  * `scripts/cron-jobs.ts` (esecuzione schedulata) e
  * `src/app/api/reminder/route.ts` (esecuzione manuale admin).
  *
- * Storico: la logica era duplicata nei due punti con codice quasi
- * identico, con rischio di drift se una veniva modificata e l'altra no.
- * Ora entrambi i chiamanti invocano le stesse funzioni esportate da qui.
+ * Entrambi i chiamanti (cron e route manuale) invocano le stesse funzioni
+ * esportate da qui, così la logica non può divergere.
  *
  * Autore: Fabio Tempera (2026)
  */
-import { PrismaClient } from "@prisma/client";
-import { anonimizzaSegnalazione } from "./gdpr";
+import { anonimizzaSegnalazione, type DbClient } from "./gdpr";
 import { UPLOADS_ROOT, isSafePathSegment, parseUrlStorageSicuro } from "./path-guard";
 import { logger } from "./logger";
-import { readdir, stat, rm } from "fs/promises";
+import { readdir, lstat, rm } from "fs/promises";
 import path from "path";
-
-// Tipo del client Prisma usato internamente. Accettiamo sia il client
-// base PrismaClient (usato negli script standalone come cron-jobs.ts e
-// backup-db.ts che girano fuori dal runtime Next.js) sia il client
-// esteso con $extends (usato nell'app via src/lib/db.ts). Prisma genera
-// tipi diversi per le due varianti, ma i metodi che usiamo qui
-// (deleteMany, findMany, updateMany, storicoStato.create) hanno firme
-// compatibili in entrambi. Usiamo un tipo permissivo per pragmatismo:
-// il type-safety è garantito dai test di integrazione su entrambi i
-// chiamanti (cron-jobs.test.ts e reminder.test.ts).
-type DbClient = PrismaClient | { [key: string]: any };
 
 /**
  * Default values per le soglie configurabili via env. Centralizzati
@@ -35,71 +22,57 @@ export const TRANSIZIONE_INVIATA_GIORNI_DEFAULT = 7;
 export const RETENTION_SEGNALAZIONI_ANNI_DEFAULT = 10;
 export const REMINDER_GIORNI_DEFAULT = 30;
 
+/** Limiti superiori: oltre questi valori le date calcolate non sono affidabili. */
+const MAX_GIORNI = 36500;
+const MAX_ANNI = 100;
+
 /**
- * Legge e valida la soglia giorni per il calcolo delle pratiche in stato
- * "in_attesa" oltre le quali emettere il reminder. Stessa logica difensiva
- * degli altri validatori: valore non finite o <= 0 → default + warn.
+ * Legge una soglia intera positiva dalle variabili d'ambiente. Valori assenti,
+ * vuoti, non interi, <= 0 o oltre `max` producono il default con un warning.
+ * I decimali non sono ammessi: una soglia come 7.5 giorni o 10.5 anni
+ * produrrebbe date calcolate in modo non prevedibile.
+ */
+function leggiSogliaIntera(nomeVariabile: string, valoreDefault: number, max: number): number {
+  const raw = process.env[nomeVariabile];
+  if (raw === undefined || raw.trim() === "") return valoreDefault;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0 || n > max) {
+    logger.warn(
+      { raw, default: valoreDefault, max },
+      `[cron-utils] ${nomeVariabile} non valido (atteso intero tra 1 e ${max}), uso default`,
+    );
+    return valoreDefault;
+  }
+  return n;
+}
+
+/**
+ * Soglia giorni oltre la quale una pratica in stato "in_attesa" genera un
+ * reminder. Valore non valido: default e warning.
  */
 export function getReminderGiorni(): number {
-  const raw = process.env.REMINDER_GIORNI;
-  if (raw === undefined || raw === "") return REMINDER_GIORNI_DEFAULT;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) {
-    logger.warn(
-      { raw, default: REMINDER_GIORNI_DEFAULT },
-      "[cron-utils] REMINDER_GIORNI non valido, uso default"
-    );
-    return REMINDER_GIORNI_DEFAULT;
-  }
-  return n;
+  return leggiSogliaIntera("REMINDER_GIORNI", REMINDER_GIORNI_DEFAULT, MAX_GIORNI);
 }
 
 /**
- * Legge e valida la soglia giorni per la transizione automatica
- * "inviata" -> "in_attesa". Se la variabile d'ambiente è assente o
- * non è un numero positivo, ritorna il default e logga un warning.
- * Senza questa validazione, un valore malformato (es. "abc")
- * produrrebbe NaN e la findMany sottostante non matcherebbe nulla,
- * silenziando il malfunzionamento del cron.
+ * Soglia giorni per la transizione automatica "inviata" -> "in_attesa".
+ * Un valore malformato (es. "abc") produrrebbe NaN e la findMany non
+ * troverebbe nulla, silenziando il cron: per questo il valore viene validato
+ * e, se non valido, si usa il default con un warning.
  */
 export function getTransizioneGiorni(): number {
-  const raw = process.env.TRANSIZIONE_INVIATA_GIORNI;
-  if (raw === undefined || raw === "") return TRANSIZIONE_INVIATA_GIORNI_DEFAULT;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) {
-    logger.warn(
-      { raw, default: TRANSIZIONE_INVIATA_GIORNI_DEFAULT },
-      "[cron-utils] TRANSIZIONE_INVIATA_GIORNI non valido, uso default"
-    );
-    return TRANSIZIONE_INVIATA_GIORNI_DEFAULT;
-  }
-  return n;
+  return leggiSogliaIntera("TRANSIZIONE_INVIATA_GIORNI", TRANSIZIONE_INVIATA_GIORNI_DEFAULT, MAX_GIORNI);
 }
 
-/**
- * Legge e valida gli anni di retention GDPR. Stessa logica difensiva
- * di getTransizioneGiorni: valore non finite o <= 0 → default + warn.
- */
+/** Anni di retention GDPR delle segnalazioni chiuse. Valore non valido: default e warning. */
 export function getRetentionAnni(): number {
-  const raw = process.env.RETENTION_SEGNALAZIONI_ANNI;
-  if (raw === undefined || raw === "") return RETENTION_SEGNALAZIONI_ANNI_DEFAULT;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) {
-    logger.warn(
-      { raw, default: RETENTION_SEGNALAZIONI_ANNI_DEFAULT },
-      "[cron-utils] RETENTION_SEGNALAZIONI_ANNI non valido, uso default"
-    );
-    return RETENTION_SEGNALAZIONI_ANNI_DEFAULT;
-  }
-  return n;
+  return leggiSogliaIntera("RETENTION_SEGNALAZIONI_ANNI", RETENTION_SEGNALAZIONI_ANNI_DEFAULT, MAX_ANNI);
 }
 
 /**
  * Cleanup delle sessioni scadute. Ritorna il numero di record eliminati.
  */
-export async function cleanupSessioniScadute(
-  db: DbClient
-): Promise<number> {
+export async function cleanupSessioniScadute(db: DbClient): Promise<number> {
   const result = await db.sessione.deleteMany({
     where: { scadenza: { lt: new Date() } },
   });
@@ -119,10 +92,7 @@ export async function cleanupSessioniScadute(
  *
  * @param userId ID utente che ha innescato l'azione (null per cron automatico)
  */
-export async function transizioneAutomaticaInviata(
-  db: DbClient,
-  userId: string | null = null
-): Promise<number> {
+export async function transizioneAutomaticaInviata(db: DbClient, userId: string | null = null): Promise<number> {
   const transizioneGiorni = getTransizioneGiorni();
   const sogliaTransizione = new Date();
   sogliaTransizione.setDate(sogliaTransizione.getDate() - transizioneGiorni);
@@ -136,17 +106,14 @@ export async function transizioneAutomaticaInviata(
   let transitate = 0;
   for (const s of daTransitare) {
     try {
-      // Transazione interattiva: updateMany + storicoStato.create nello
-      // stesso blocco atomico. Se uno dei due step fallisce, l'intera
-      // operazione viene annullata, mantenendo coerenza tra stato della
-      // segnalazione e audit trail.
-      // Il tipo di `tx` dipende dalla variante di DbClient (PrismaClient o
-      // client esteso). Usiamo un cast esplicito per preservare la sicurezza
-      // dei tipi sui metodi effettivamente chiamati (segnalazione.updateMany,
-      // storicoStato.create), garantiti dai test di integrazione.
-      await db.$transaction(async (tx: any) => {
+      // Transazione interattiva: updateMany + storicoStato.create nello stesso
+      // blocco atomico. Se uno dei due step fallisce, l'intera operazione viene
+      // annullata, mantenendo coerenza tra stato della segnalazione e audit trail.
+      // Il tipo di `tx` è inferito dal client: i metodi chiamati sono verificati
+      // dal compilatore.
+      const completata = await db.$transaction(async (tx) => {
         const updateResult = await tx.segnalazione.updateMany({
-          where: { id: s.id, stato: "inviata" },
+          where: { id: s.id, stato: "inviata", dataInvio: { lt: sogliaTransizione } },
           data: { stato: "in_attesa" },
         });
         if (updateResult && typeof updateResult.count === "number" && updateResult.count > 0) {
@@ -162,14 +129,21 @@ export async function transizioneAutomaticaInviata(
                   : `Transizione automatica: nessuna risposta dopo ${transizioneGiorni} giorni dall'invio`,
             },
           });
-          transitate++;
+          return true;
         }
+        return false;
       });
+      // Si conta solo un commit riuscito. Se il commit fallisce dopo la
+      // callback, il catch registra l'errore e non dichiara una transizione.
+      if (completata) transitate++;
     } catch (e) {
       // Isola l'errore del singolo record: logga e continua con il prossimo.
       // L'alternativa (propagare l'errore) bloccherebbe l'intero cron,
       // lasciando le segnalazioni successive non transitate.
-      logger.error({ err: e, segnalazioneId: s.id }, "[cron-utils] Errore transizione automatica singola segnalazione, continuo col prossimo");
+      logger.error(
+        { err: e, segnalazioneId: s.id },
+        "[cron-utils] Errore transizione automatica singola segnalazione, continuo col prossimo",
+      );
     }
   }
   return transitate;
@@ -186,9 +160,9 @@ export async function transizioneAutomaticaInviata(
  * ritardando un obbligo GDPR dichiarato in PRIVACY.md come "10 anni dalla
  * chiusura".
  *
- * Per garantire la backward-compatibilità con segnalazioni chiuse prima
- * dell'introduzione del campo `dataChiusura`, viene usato un fallback
- * su `updatedAt` solo se `dataChiusura` è null.
+ * Le segnalazioni chiuse senza `dataChiusura` valorizzato usano `updatedAt`
+ * come riferimento temporale: il fallback si applica solo se `dataChiusura`
+ * è null.
  *
  * Ogni segnalazione viene anonimizzata in un blocco try/catch separato:
  * un errore su una singola segnalazione (es. permessi FS, transient DB)
@@ -197,18 +171,14 @@ export async function transizioneAutomaticaInviata(
  *
  * @param userId ID utente che ha innescato l'azione (null per cron automatico)
  */
-export async function anonimizzaSegnalazioniGdpr(
-  db: DbClient,
-  userId: string | null = null
-): Promise<number> {
+export async function anonimizzaSegnalazioniGdpr(db: DbClient, userId: string | null = null): Promise<number> {
   const retentionAnni = getRetentionAnni();
   const sogliaRetention = new Date();
   sogliaRetention.setFullYear(sogliaRetention.getFullYear() - retentionAnni);
 
   // Anonimizza le segnalazioni chiuse da più di RETENTION_SEGNALAZIONI_ANNI.
   // Usa `dataChiusura` come filtro principale (campo dedicato, registrato
-  // alla chiusura della pratica). Per le segnalazioni chiuse prima
-  // dell'introduzione del campo (dataChiusura = null), usa `updatedAt`
+  // alla chiusura della pratica). Se dataChiusura è null, usa `updatedAt`
   // come fallback (vedi commento sopra).
   const daAnonimizzare = await db.segnalazione.findMany({
     where: {
@@ -230,15 +200,19 @@ export async function anonimizzaSegnalazioniGdpr(
   let anonimizzate = 0;
   for (const s of daAnonimizzare) {
     try {
-      await anonimizzaSegnalazione(s.id, retentionAnni, userId);
-      anonimizzate++;
+      if (await anonimizzaSegnalazione(db, s.id, retentionAnni, userId)) {
+        anonimizzate++;
+      }
     } catch (e) {
       // Isola l'errore del singolo record: logga e continua. L'obbligo
       // GDPR di anonimizzare entro la retention va bilanciato con la
       // resilienza del job: bloccare tutto su un singolo errore lascerebbe
       // le segnalazioni successive non anonimizzate, prolungando la
       // violazione della retention per tutte loro.
-      logger.error({ err: e, segnalazioneId: s.id }, "[cron-utils] Errore anonimizzazione GDPR singola segnalazione, continuo col prossimo");
+      logger.error(
+        { err: e, segnalazioneId: s.id },
+        "[cron-utils] Errore anonimizzazione GDPR singola segnalazione, continuo col prossimo",
+      );
     }
   }
   return anonimizzate;
@@ -267,11 +241,9 @@ export async function anonimizzaSegnalazioniGdpr(
  * Sicurezza: valida ogni nome directory/file con `isSafePathSegment`
  * prima di qualsiasi operazione, per prevenire path traversal.
  *
- * Compatibilità: la normalizzazione degli urlStorage tramite
- * `parseUrlStorageSicuro` gestisce sia il formato attuale
- * (`<segnalazioneId>/<filename>`) sia il formato legacy
- * (`api/allegatiplaceholder/<segnalazioneId>/<filename>`), evitando
- * falsi positivi che cancellerebbero file regolarmente referenziati.
+ * Gli urlStorage dei record vengono confrontati nel formato
+ * `<segnalazioneId>/<filename>` tramite `parseUrlStorageSicuro`: un file
+ * referenziato da un record valido non viene mai considerato orfano.
  *
  * @returns numero di file/directory orfani rimossi
  */
@@ -281,16 +253,19 @@ export async function cleanupFileOrfani(db: DbClient): Promise<number> {
   try {
     entries = await readdir(UPLOADS_ROOT);
   } catch (e) {
-    // La directory non esiste (setup fresco senza upload): ok.
-    logger.debug({ err: e }, "[cron-utils] readdir UPLOADS_ROOT fallito (probabile setup fresco)");
+    // Directory assente (setup senza upload): nessun orfano da rimuovere.
+    // Qualunque altro errore (permessi, I/O) va segnalato, non ignorato.
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") {
+      logger.debug({ err: e }, "[cron-utils] UPLOADS_ROOT assente: nessun file orfano");
+    } else {
+      logger.warn({ err: e }, "[cron-utils] lettura di UPLOADS_ROOT fallita: pulizia orfani saltata");
+    }
     return 0;
   }
 
-  // Recupera tutti gli urlStorage dal DB e normalizzali nel formato
-  // `<segnalazioneId>/<filename>` indipendentemente dal formato originale
-  // (attuale o legacy `api/allegatiplaceholder/...`). Senza questa
-  // normalizzazione, i record con urlStorage legacy verrebbero considerati
-  // orfani e i loro file fisici cancellati, causando perdita di dati.
+  // Recupera tutti gli urlStorage dal DB e li normalizza nel formato
+  // `<segnalazioneId>/<filename>`. Un urlStorage non parsabile non
+  // corrisponde ad alcun file su disco e quindi non entra nel set.
   const allegati = await db.allegato.findMany({
     select: { urlStorage: true },
   });
@@ -299,10 +274,6 @@ export async function cleanupFileOrfani(db: DbClient): Promise<number> {
     const parsed = parseUrlStorageSicuro(a.urlStorage);
     if (parsed) {
       validUrlStorage.add(`${parsed.segnalazioneId}/${parsed.filename}`);
-    } else {
-      // Se il parsing fallisce, manteniamo il valore originale per non
-      // rischiare di cancellare file regolarmente referenziati.
-      validUrlStorage.add(a.urlStorage);
     }
   }
 
@@ -332,7 +303,8 @@ export async function cleanupFileOrfani(db: DbClient): Promise<number> {
 
     let s;
     try {
-      s = await stat(dirPath);
+      // lstat non segue una directory simbolica verso file esterni allo storage.
+      s = await lstat(dirPath);
     } catch (e) {
       logger.debug({ err: e, dirPath }, "[cron-utils] stat directory fallito, skip");
       continue;
@@ -375,7 +347,7 @@ export async function cleanupFileOrfani(db: DbClient): Promise<number> {
         // potrebbe aver scritto il file ma non ancora commititato il
         // record in tabella allegato.
         try {
-          const fileStat = await stat(filePath);
+          const fileStat = await lstat(filePath);
           if (ora - fileStat.mtimeMs < SOGLIA_RECENTE_MS) {
             logger.debug({ filePath }, "[cron-utils] file orfano recente (possibile upload in corso), skip");
             continue;

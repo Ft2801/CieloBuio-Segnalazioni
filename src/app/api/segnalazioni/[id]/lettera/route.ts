@@ -17,14 +17,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSessionUser, canViewSegnalazione } from "@/lib/auth";
 import { buildLetteraContextFromSegnalazione, generaHtmlLettera } from "@/lib/lettera";
-import { parseUrlStorageSicuro, risolviPathAllegatoSicuro } from "@/lib/path-guard";
+import { parseUrlStorageSicuro, risolviPathAllegatoSicuro, verificaPercorsoFisicoAllegato } from "@/lib/path-guard";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { readFile } from "fs/promises";
 import { logger } from "@/lib/logger";
 
+/** Estensioni ammesse per le immagini incorporate nella lettera. */
+const MIME_IMMAGINI: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+};
+
 type Params = { params: Promise<{ id: string }> };
 
-// C3: HTML escape helper per prevenire XSS
+// Helper di escape HTML per prevenire XSS.
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, "&amp;")
@@ -44,13 +52,7 @@ export async function GET(req: NextRequest, { params }: Params) {
   // onerosa (base64 di fino a 4 foto da 10 MB = ~53 MB di HTML). Limita
   // abusi senza impattare l'uso normale (preview/stampa di una lettera
   // avviene tipicamente una-tre volte per segnalazione).
-  const rl = checkRateLimit(
-    `lettera:${user.id}`,
-    30,
-    60 * 60 * 1000,
-    60 * 60 * 1000,
-    5 * 60 * 1000
-  );
+  const rl = checkRateLimit(`lettera:${user.id}`, 30, 60 * 60 * 1000, 60 * 60 * 1000, 5 * 60 * 1000);
   if (!rl.allowed) {
     const minuti = Math.ceil(rl.retryAfterSeconds / 60);
     return NextResponse.json(
@@ -58,7 +60,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       {
         status: 429,
         headers: { "Retry-After": String(rl.retryAfterSeconds) },
-      }
+      },
     );
   }
 
@@ -66,7 +68,7 @@ export async function GET(req: NextRequest, { params }: Params) {
   const url = new URL(req.url);
   const withAttachments = url.searchParams.get("with_attachments") === "1";
 
-  // C1: verifica visibilità prima di procedere
+  // Verifica visibilità prima di procedere
   const segnalazione = await db.segnalazione.findUnique({
     where: { id },
     select: { id: true, volontarioId: true, provinciaId: true, regioneId: true },
@@ -93,29 +95,26 @@ export async function GET(req: NextRequest, { params }: Params) {
         const immaginiHtml: string[] = [];
         for (const a of allegati) {
           try {
-            // L4: path traversal protection centralizzata in path-guard.ts.
+            // Protezione da path traversal centralizzata in path-guard.ts.
             // Parse + validazione segmenti (nessun `..`, `/`, `\`).
             const parsed = parseUrlStorageSicuro(a.urlStorage);
             if (!parsed) continue;
             // Verifica coerenza: l'ID estratto dall'urlStorage deve
             // corrispondere all'ID della segnalazione corrente.
             if (parsed.segnalazioneId !== id) continue;
-            // parsed è già validato, risolviPathAllegatoSicuro restituisce
-            // sempre un path non null. Cast sicuro.
-            const filePath = risolviPathAllegatoSicuro(
-              parsed.segnalazioneId,
-              parsed.filename
-            ) as string;
-
-            const buffer = await readFile(filePath);
+            // Solo immagini: un allegato di tipo "foto" con estensione .pdf
+            // non può essere incorporato come <img>.
             const dotIdx = parsed.filename.lastIndexOf(".");
             const ext = dotIdx >= 0 ? parsed.filename.slice(dotIdx).toLowerCase() : "";
-            const mime =
-              ext === ".png" ? "image/png" :
-              ext === ".webp" ? "image/webp" :
-              "image/jpeg";
+            const mime = MIME_IMMAGINI[ext];
+            if (!mime) continue;
+
+            const filePath = risolviPathAllegatoSicuro(parsed.segnalazioneId, parsed.filename);
+            if (!filePath) continue;
+            await verificaPercorsoFisicoAllegato(filePath);
+            const buffer = await readFile(filePath);
             const base64 = buffer.toString("base64");
-            // C3: escape del nomeOriginale per prevenire XSS
+            // Escape del nomeOriginale per prevenire XSS.
             const safeNome = escapeHtml(a.nomeOriginale);
             immaginiHtml.push(`
               <div class="allegato">
@@ -136,8 +135,12 @@ export async function GET(req: NextRequest, { params }: Params) {
               </div>
             </div>
           `;
-          // Inserisci prima del </body>
-          html = html.replace("</body>", `${allegatiSection}\n</body>`);
+          // Inserisce la sezione prima di </body>. Si usa una funzione come
+          // replacement: con una stringa, $& e $' nel contenuto (es. nomi
+          // file) verrebbero interpretati e corromperebbero l'HTML. Se il
+          // marker manca, la sezione viene accodata.
+          const sezione = `${allegatiSection}\n</body>`;
+          html = html.includes("</body>") ? html.replace("</body>", () => sezione) : `${html}${allegatiSection}`;
         }
       }
     }
@@ -147,20 +150,18 @@ export async function GET(req: NextRequest, { params }: Params) {
         "Content-Type": "text/html; charset=utf-8",
         "X-Content-Type-Options": "nosniff",
         // CSP esplicita sulla risposta HTML della lettera: defense-in-depth
-        // oltre al middleware, che potrebbe non propagare gli header su
+        // oltre al proxy, che potrebbe non propagare gli header su
         // risposte text/html non JSON. La lettera contiene immagini base64
         // e testo utente escapizzato: blocchiamo script esterni e
         // contesti che potrebbero eseguire codice iniettato.
-        "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'none'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+        "Content-Security-Policy":
+          "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'none'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
         "Cache-Control": "private, no-store",
       },
     });
   } catch (e) {
-    // M4: non rivelare dettagli dell'errore al client
+    // Non rivelare dettagli dell'errore al client.
     logger.error({ err: e }, "Errore generazione lettera");
-    return NextResponse.json(
-      { error: "Errore durante la generazione della lettera" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore durante la generazione della lettera" }, { status: 500 });
   }
 }

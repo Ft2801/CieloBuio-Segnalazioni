@@ -19,7 +19,7 @@
  * implementazioni.
  *
  * La protezione CSRF su operazioni mutative è garantita dal cookie
- * SameSite=Strict + verifica Origin/Referer nel middleware globale, NON
+ * SameSite=Strict + verifica Origin/Referer nel proxy globale (src/proxy.ts), NON
  * dalla semplice separazione GET/POST.
  *
  * Autore: Fabio Tempera (2026)
@@ -35,10 +35,14 @@ import {
   getReminderGiorni,
   getTransizioneGiorni,
 } from "@/lib/cron-utils";
+import { leggiBodyOggetto } from "@/lib/http";
 
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   const user = await getSessionUser();
-  if (!user || !canReviewSegnalazioni(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canReviewSegnalazioni(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
@@ -81,44 +85,50 @@ export async function GET(req: NextRequest) {
     },
     take: 100,
   });
+  // Il conteggio è il totale delle pratiche che superano la soglia, non
+  // solo quello della pagina restituita (massimo 100).
+  const totale = await db.segnalazione.count({ where });
 
   return NextResponse.json(
     {
       sogliaGiorni,
       transizioneGiorni,
-      count: pratiche.length,
+      count: totale,
       pratiche,
     },
-    { headers: { "Cache-Control": "private, no-store" } }
+    { headers: { "Cache-Control": "private, no-store" } },
   );
 }
 
 export async function POST(req: NextRequest) {
   const user = await getSessionUser();
-  if (!user || !canReviewSegnalazioni(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canReviewSegnalazioni(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const action = body.action;
+  const body = (await leggiBodyOggetto(req)) ?? {};
+  const action = typeof body.action === "string" ? body.action : "";
 
   // Validazione di `action` PRIMA di eseguire qualunque side-effect.
-  if (!action || !["cleanup", "auto-transition", "gdpr-anonymize"].includes(action)) {
+  if (!["cleanup", "auto-transition", "gdpr-anonymize"].includes(action)) {
     return NextResponse.json(
       { error: "Azione non valida. Valori ammessi: cleanup, auto-transition, gdpr-anonymize" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
-  // Le azioni `cleanup` (elimina tutte le sessioni scadute di tutti gli
-  // utenti) e `auto-transition` (transita tutte le segnalazioni
-  // "inviata"→"in_attesa" a livello nazionale) sono operazioni globali di
-  // manutenzione che impattano l'intero database, non solo l'ambito
-  // territoriale del referente. Devono essere riservate al solo admin.
+  // Tutte le azioni di manutenzione sono globali: `cleanup` elimina le sessioni
+  // scadute di tutti gli utenti, `auto-transition` transita le segnalazioni
+  // "inviata"→"in_attesa" a livello nazionale e `gdpr-anonymize` anonimizza le
+  // segnalazioni scadute di tutto il database. Impattano l'intero database, non
+  // solo l'ambito territoriale del referente: sono riservate al solo admin.
   if (user.ruolo !== "admin") {
     return NextResponse.json(
       { error: "Solo l'amministratore può eseguire operazioni di manutenzione globali" },
-      { status: 403 }
+      { status: 403 },
     );
   }
 
@@ -132,7 +142,8 @@ export async function POST(req: NextRequest) {
     sessioniPulite = await cleanupSessioniScadute(db);
   } else if (action === "auto-transition") {
     transizioniAutomatiche = await transizioneAutomaticaInviata(db, user.id);
-  } else if (action === "gdpr-anonymize") {
+  } else {
+    // Unica azione residua dopo la validazione sopra.
     segnalazioniAnonimizzate = await anonimizzaSegnalazioniGdpr(db, user.id);
   }
 

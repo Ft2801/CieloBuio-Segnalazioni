@@ -1,52 +1,138 @@
 /**
  * API: POST /api/segnalazioni/[id]/invia-pec
- * Invio reale della PEC al Comune (e ARPA se richiesto).
- * Transizione: approvata -> inviata
  *
- * Il sistema genera qui il numero di protocollo definitivo (se non già presente),
- * registra il log di invio e cambia stato. L'invio SMTP effettivo è disabilitato
- * in ambiente di sviluppo (viene solo loggato); in produzione va configurato con
- * le credenziali della casella PEC dell'associazione.
+ * Invio reale della PEC al Comune (e ad ARPA se richiesto).
+ * Transizione: approvata -> inviata.
  *
- * Vincolo tecnico (specifiche sezione 13): i messaggi PEC non supportano il CCN
- * verso indirizzi PEC, quindi tutti i destinatari vanno in TO o CC.
+ * Sequenza:
+ *  1. Autenticazione, permesso di invio e rate limit (5 invii/ora per utente).
+ *  2. Lock applicativo per segnalazione: una seconda richiesta concorrente
+ *     riceve 409 invece di inviare un'altra PEC.
+ *  3. Verifica di stato, competenza territoriale e validità dei destinatari
+ *     e del mittente. Tutti i controlli precedono la generazione del numero
+ *     di protocollo e l'invio.
+ *  4. Generazione del numero di protocollo definitivo (se mancante). Il numero
+ *     viene assegnato alla segnalazione prima dell'invio: se l'invio fallisce,
+ *     resta assegnato e il tentativo successivo riusa lo stesso numero.
+ *  5. Invio SMTP. Senza configurazione SMTP la richiesta è rifiutata con 503 e
+ *     nessuno stato cambia: una PEC non spedita non risulta mai come inviata.
+ *  6. Registrazione obbligatoria del tentativo prima di SMTP: un crash o un
+ *     esito incerto non possono generare un secondo invio automatico.
+ *  7. Transizione di stato e storico in un'unica transazione, con
+ *     clausola WHERE stato = 'approvata'.
+ *
+ * Vincolo tecnico: i messaggi PEC non supportano il CCN verso indirizzi PEC,
+ * quindi tutti i destinatari vanno in TO o CC.
  *
  * Autore: Fabio Tempera (2026)
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import nodemailer from "nodemailer";
+import { stat } from "fs/promises";
+import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
 import { getSessionUser, canSendPec, hasTerritorialCompetence } from "@/lib/auth";
-import { generaNumeroProtocollo } from "@/lib/protocollo";
+import type { SessionUser } from "@/lib/types";
+import { ErroreProtocollo, generaNumeroProtocollo } from "@/lib/protocollo";
 import { notificaPecInviata } from "@/lib/notifiche";
-import { checkRateLimit, resetRateLimit } from "@/lib/rate-limit";
-import { buildLetteraContextFromSegnalazione, generaTestoLettera } from "@/lib/lettera";
-import { parseUrlStorageSicuro, risolviPathAllegatoSicuro } from "@/lib/path-guard";
-import { readFile } from "fs/promises";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { buildLetteraContextFromSegnalazione, generaTestoLettera, PEC_MITTENTE_NON_CONFIGURATA } from "@/lib/lettera";
+import { parseUrlStorageSicuro, risolviPathAllegatoSicuro, verificaPercorsoFisicoAllegato } from "@/lib/path-guard";
+import { leggiConfigurazioneSmtp, getTransporter } from "@/lib/smtp";
 import { logger } from "@/lib/logger";
+import { messaggioDaErrore } from "@/lib/errori";
 
 type Params = { params: Promise<{ id: string }> };
 
+const RATE_LIMIT_MAX = 5;
+const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
+
+// Lease dell'invio PEC persistito nel database: impedisce che due richieste
+// concorrenti (doppio clic, retry del browser) inviino due PEC reali al
+// Comune, anche con più istanze dell'app. Un lock più vecchio di
+// PEC_LOCK_TTL_MS è orfano (crash del processo) e può essere riacquisito.
+const PEC_LOCK_TTL_MS = 10 * 60 * 1000;
+
+async function acquisisciLock(id: string, token: string): Promise<boolean> {
+  const { count } = await db.segnalazione.updateMany({
+    where: {
+      id,
+      OR: [{ invioPecLockToken: null }, { invioPecLockAt: { lt: new Date(Date.now() - PEC_LOCK_TTL_MS) } }],
+    },
+    data: { invioPecLockToken: token, invioPecLockAt: new Date() },
+  });
+  return count === 1;
+}
+
+/** true se il percorso esiste ed è un file leggibile. */
+async function fileLeggibile(filePath: string): Promise<boolean> {
+  try {
+    await verificaPercorsoFisicoAllegato(filePath);
+    return (await stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function rilasciaLock(id: string, token: string): Promise<void> {
+  try {
+    await db.segnalazione.updateMany({
+      where: { id, invioPecLockToken: token },
+      data: { invioPecLockToken: null, invioPecLockAt: null },
+    });
+  } catch (err) {
+    // Il lock scade comunque da solo (PEC_LOCK_TTL_MS): il fallimento è solo loggato.
+    logger.error({ err, segnalazioneId: id }, "Rilascio del lock invio PEC non riuscito");
+  }
+}
+
+/** Forma minima di un indirizzo: parte locale, @, dominio con almeno un punto. */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export async function POST(_req: NextRequest, { params }: Params) {
   const user = await getSessionUser();
-  if (!user || !canSendPec(user)) {
-    return NextResponse.json(
-      { error: "Non autorizzato all'invio PEC" },
-      { status: 403 }
-    );
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canSendPec(user)) {
+    return NextResponse.json({ error: "Non autorizzato all'invio PEC" }, { status: 403 });
   }
 
-  // H5: rate limiting per utente (5 PEC/ora, blocco 1 ora)
-  const rl = checkRateLimit(`pec:${user.id}`, 5, 60 * 60 * 1000, 60 * 60 * 1000, 60 * 60 * 1000);
+  const rl = checkRateLimit(
+    `pec:${user.id}`,
+    RATE_LIMIT_MAX,
+    RATE_LIMIT_WINDOW_MS,
+    RATE_LIMIT_WINDOW_MS,
+    RATE_LIMIT_WINDOW_MS,
+  );
   if (!rl.allowed) {
     return NextResponse.json(
       { error: `Troppi invii PEC. Riprova tra ${Math.ceil(rl.retryAfterSeconds / 60)} minuti.` },
-      { status: 429, headers: { "Retry-After": String(rl.retryAfterSeconds) } }
+      { status: 429, headers: { "Retry-After": String(rl.retryAfterSeconds) } },
     );
   }
 
   const { id } = await params;
+  const token = randomUUID();
+  if (!(await acquisisciLock(id, token))) {
+    const esiste = await db.segnalazione.findUnique({ where: { id }, select: { id: true } });
+    if (!esiste) {
+      return NextResponse.json({ error: "Non trovata" }, { status: 404 });
+    }
+    return NextResponse.json(
+      { error: "Invio PEC già in corso per questa segnalazione. Attendere l'esito prima di riprovare." },
+      { status: 409 },
+    );
+  }
+
+  try {
+    return await inviaPecSegnalazione(user, id, token);
+  } finally {
+    await rilasciaLock(id, token);
+  }
+}
+
+async function inviaPecSegnalazione(user: SessionUser, id: string, token: string): Promise<NextResponse> {
   const segnalazione = await db.segnalazione.findUnique({
     where: { id },
     include: {
@@ -60,58 +146,43 @@ export async function POST(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Non trovata" }, { status: 404 });
   }
 
-  // H2: verifica competenza territoriale
   if (!hasTerritorialCompetence(user, segnalazione)) {
-    return NextResponse.json(
-      { error: "Non autorizzato per questa segnalazione" },
-      { status: 403 }
-    );
+    return NextResponse.json({ error: "Non autorizzato per questa segnalazione" }, { status: 403 });
   }
 
   if (segnalazione.stato !== "approvata") {
+    return NextResponse.json({ error: "La segnalazione deve essere prima approvata" }, { status: 400 });
+  }
+
+  // Un tentativo iniziato, incerto o concluso può aver già consegnato la
+  // PEC, anche se un crash ha lasciato lo stato della pratica invariato.
+  // Il controllo viene ripetuto nella transazione di prenotazione.
+  const invioPrecedente = await db.logInvioPec.findFirst({
+    where: { segnalazioneId: id, tipo: "reale", esito: { in: ["in_corso", "incerto", "ok"] } },
+    select: { id: true },
+  });
+  if (invioPrecedente) {
     return NextResponse.json(
-      { error: "La segnalazione deve essere prima approvata" },
-      { status: 400 }
+      { error: "Esiste già un tentativo di invio PEC. Verificare l'esito nella casella PEC prima di riprovare." },
+      { status: 409 },
     );
   }
 
-  // Genera il numero di protocollo definitivo se mancante.
-  // La funzione generaNumeroProtocollo gestisce la race condition con
-  // transazione + retry su collisione unique.
-  let numeroProtocollo = segnalazione.numeroProtocollo;
-  if (!numeroProtocollo) {
-    // Dopo anonimizzazione GDPR, il volontario può essere null. In quel
-    // caso non è possibile generare un nuovo protocollo (manca il
-    // segnalatore): restituisci errore esplicito.
-    if (!segnalazione.volontario || !segnalazione.volontarioId) {
-      return NextResponse.json(
-        { error: "Segnalazione anonimizzata: impossibile generare un numero di protocollo" },
-        { status: 400 }
-      );
-    }
-    const regione = segnalazione.regione ?? segnalazione.provincia?.regione;
-    if (!regione || !segnalazione.provincia) {
-      return NextResponse.json(
-        { error: "Regione o provincia non determinabile" },
-        { status: 400 }
-      );
-    }
-    numeroProtocollo = await generaNumeroProtocollo({
-      data: segnalazione.dataSegnalazione,
-      regione: regione.regione,
-      provinciaSigla: segnalazione.provincia.sigla,
-      segnalatoreId: segnalazione.volontarioId,
-      segnalatoreNomeCognome: segnalazione.volontario.nomeCognome,
-      inizialiProtocollo: segnalazione.volontario.inizialiProtocollo,
-      segnalazioneId: segnalazione.id,
-    });
+  // La PEC è indirizzata al Comune. Senza la sua PEC non si invia nulla: ARPA
+  // e CC aggiuntive non sostituiscono il destinatario principale, altrimenti la
+  // segnalazione risulterebbe "inviata" senza che il Comune la riceva.
+  if (!segnalazione.comune?.pecComune) {
+    return NextResponse.json(
+      {
+        error:
+          "Il Comune non ha una PEC configurata: completare i dati dal pannello di amministrazione prima dell'invio.",
+      },
+      { status: 400 },
+    );
   }
 
-  // Composizione destinatari (TO + CC, mai BCC per le PEC)
-  const destinatari: string[] = [];
-  if (segnalazione.comune?.pecComune) {
-    destinatari.push(segnalazione.comune.pecComune);
-  }
+  // Destinatari (TO + CC, mai BCC per le PEC).
+  const destinatari: string[] = [segnalazione.comune.pecComune];
   const regione = segnalazione.regione ?? segnalazione.provincia?.regione;
   if (segnalazione.includiArpa && regione?.pecArpaRegionale) {
     destinatari.push(regione.pecArpaRegionale);
@@ -123,194 +194,258 @@ export async function POST(_req: NextRequest, { params }: Params) {
     }
   }
 
-  // Validazione pre-SMTP: se nessun destinatario, l'invio fallirebbe con
-  // errore opaco ("No recipients"). Restituiamo un errore chiaro.
-  if (destinatari.length === 0) {
+  const destinatariNonValidi = destinatari.filter((d) => !EMAIL_RE.test(d));
+  if (destinatariNonValidi.length > 0) {
     return NextResponse.json(
-      { error: "Nessun destinatario PEC configurato. Verifica che il comune abbia una PEC e/o che la segnalazione includa CC validi." },
-      { status: 400 }
+      {
+        error: `Impossibile inviare PEC: indirizzi non validi: ${destinatariNonValidi.join(", ")}. Correggerli dal pannello di amministrazione.`,
+      },
+      { status: 400 },
     );
   }
 
-  // Blocca l'invio se la PEC del comune contiene un placeholder
-  // (es. "PEC-DA-CONFIGURARE@comune-...") che indica che il dato non è
-  // stato ancora configurato dall'amministratore. Inviarci una PEC reale
-  // produrrebbe un bounce e sprecerebbe il numero di protocollo.
-  const PLACEHOLDER_PEC_PATTERN = /PEC-DA-CONFIGURARE/i;
-  const placeholderDestinatari = destinatari.filter((d) => PLACEHOLDER_PEC_PATTERN.test(d));
-  if (placeholderDestinatari.length > 0) {
+  // Senza configurazione SMTP la PEC non può essere spedita: la richiesta è
+  // rifiutata prima di qualsiasi modifica (nessun protocollo, nessuno stato).
+  const smtp = leggiConfigurazioneSmtp();
+  if (!smtp) {
     return NextResponse.json(
-      { error: `Impossibile inviare PEC: i seguenti destinatari contengono un placeholder non configurato: ${placeholderDestinatari.join(", ")}. Configurare la PEC reale dal pannello di amministrazione.` },
-      { status: 400 }
+      { error: "Servizio di posta non configurato: la PEC non può essere inviata. Contatta l'amministrazione." },
+      { status: 503 },
     );
   }
 
-  // Mittente: obbligatorio. Se manca sia PEC_FROM sia user.pec, nodemailer
-  // restituirebbe un errore generico. Usiamo || invece di ?? perché una
-  // stringa vuota in PEC_FROM va trattata come "non configurata".
-  const fromAddress = process.env.PEC_FROM || user.pec;
+  // Mittente: PEC_FROM ha la precedenza, poi la PEC dell'utente. Una stringa
+  // vuota è trattata come "non configurata".
+  const fromAddress = smtp.from || user.pec || undefined;
+  // Con mittente non visibile la lettera riporta la PEC dell'associazione
+  // (PEC_FROM): senza di essa il testo inviato al Comune sarebbe incompleto.
+  if (!segnalazione.mittenteVisibile && !smtp.from) {
+    return NextResponse.json(
+      { error: "Mittente non visibile: occorre configurare PEC_FROM con la PEC dell'associazione prima di inviare." },
+      { status: 400 },
+    );
+  }
   if (!fromAddress) {
     return NextResponse.json(
       { error: "Mittente PEC non configurato. Imposta PEC_FROM nel file .env o assegna una PEC all'utente." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
-  // Costruisce il corpo completo della lettera. generaTestoLettera include
-  // già il testo introduttivo del volontario (se presente), garantendo
-  // coerenza tra anteprima (lettera/route.ts) e invio reale.
-  const letteraContext = await buildLetteraContextFromSegnalazione(id);
-  const testoPec = generaTestoLettera(letteraContext);
-
-  // Raccoglie gli allegati fotografici e documentali della segnalazione
-  // per includerli nella PEC come attachment SMTP. Le foto sono prove
-  // visive essenziali della non conformità segnalata.
+  // Allegati (foto e documenti) come attachment SMTP. Il controllo avviene
+  // prima della generazione del protocollo: un allegato non valido non consuma
+  // un numero e non lascia tracce.
   const allegati = await db.allegato.findMany({
     where: { segnalazioneId: id, tipo: { in: ["foto", "documento"] } },
     orderBy: { createdAt: "asc" },
   });
-  const smtpAttachments: nodemailer.SendMailOptions["attachments"] = [];
+  // Ogni allegato registrato deve essere presente e leggibile: una PEC senza
+  // una foto o un documento che la segnalazione dichiara non viene inviata.
+  const smtpAttachments: { filename: string; path: string }[] = [];
   for (const a of allegati) {
-    // L4: path traversal protection centralizzata in path-guard.ts.
-    // Parse + validazione segmenti (nessun `..`, `/`, `\`).
     const parsed = parseUrlStorageSicuro(a.urlStorage);
-    if (!parsed) continue;
-    if (parsed.segnalazioneId !== id) continue;
-    // parsed è già validato, risolviPathAllegatoSicuro restituisce sempre
-    // un path non null. Cast sicuro perché i segmenti sono già validati.
-    const filePath = risolviPathAllegatoSicuro(
-      parsed.segnalazioneId,
-      parsed.filename
-    ) as string;
-    try {
-      await readFile(filePath);
-      smtpAttachments.push({
-        filename: a.nomeOriginale.replace(/[^\w.\- ]/g, "_").slice(0, 100),
-        path: filePath,
-      });
-    } catch {
-      // File mancante: salta questo allegato
+    const filePath =
+      parsed && parsed.segnalazioneId === id ? risolviPathAllegatoSicuro(parsed.segnalazioneId, parsed.filename) : null;
+    if (!filePath || !(await fileLeggibile(filePath))) {
+      logger.error({ segnalazioneId: id, allegatoId: a.id }, "Allegato non leggibile: invio PEC annullato");
+      return NextResponse.json(
+        {
+          error: `Allegato "${a.nomeOriginale}" non disponibile sul server: PEC non inviata. Contattare l'amministrazione.`,
+        },
+        { status: 500 },
+      );
     }
+    smtpAttachments.push({
+      filename: a.nomeOriginale.replace(/[^\w.\- ]/g, "_").slice(0, 100),
+      path: filePath,
+    });
   }
 
-  // Invio SMTP effettivo (mock in assenza di credenziali configurate)
-  let esito: "ok" | "errore" = "ok";
-  let messaggioErrore: string | null = null;
-
-  const pecHost = process.env.PEC_SMTP_HOST;
-  if (pecHost) {
+  // Numero di protocollo: generato solo dopo che tutti i controlli sono superati.
+  let numeroProtocollo = segnalazione.numeroProtocollo;
+  if (!numeroProtocollo) {
+    // Dopo anonimizzazione GDPR il volontario può essere null: manca il
+    // segnalatore, quindi non è possibile generare un nuovo protocollo.
+    if (!segnalazione.volontario || !segnalazione.volontarioId) {
+      return NextResponse.json(
+        { error: "Segnalazione anonimizzata: impossibile generare un numero di protocollo" },
+        { status: 400 },
+      );
+    }
+    if (!regione || !segnalazione.provincia) {
+      return NextResponse.json({ error: "Regione o provincia non determinabile" }, { status: 400 });
+    }
     try {
-      // Invio SMTP reale: configurare PEC_SMTP_HOST, PEC_SMTP_PORT,
-      // PEC_SMTP_USER, PEC_SMTP_PASSWORD, PEC_FROM nel file .env
-      const transporter = nodemailer.createTransport({
-        host: pecHost,
-        port: Number(process.env.PEC_SMTP_PORT ?? 465),
-        secure: true,
-        auth: {
-          user: process.env.PEC_SMTP_USER,
-          pass: process.env.PEC_SMTP_PASSWORD,
-        },
-      });
-      await transporter.sendMail({
-        from: fromAddress,
-        to: destinatari.join(", "),
-        subject: segnalazione.oggettoPec ?? "Segnalazione",
-        text: testoPec,
-        attachments: smtpAttachments,
+      numeroProtocollo = await generaNumeroProtocollo({
+        data: segnalazione.dataSegnalazione,
+        regione: regione.regione,
+        provinciaSigla: segnalazione.provincia.sigla,
+        segnalatoreId: segnalazione.volontarioId,
+        segnalatoreNomeCognome: segnalazione.volontario.nomeCognome,
+        inizialiProtocollo: segnalazione.volontario.inizialiProtocollo,
+        segnalazioneId: segnalazione.id,
       });
     } catch (e) {
-      esito = "errore";
-      messaggioErrore = e instanceof Error ? e.message : String(e);
+      if (e instanceof ErroreProtocollo) {
+        return NextResponse.json({ error: e.message }, { status: 400 });
+      }
+      // Errore non previsto prima dell'invio: nessuna PEC è partita, quindi la risposta 500 è sicura.
+      logger.error({ err: e, segnalazioneId: id }, "Generazione del numero di protocollo fallita");
+      return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
     }
-  } else {
-    // Modalità demo: simula l'invio con un piccolo ritardo
-    logger.info(
-      { segnalazioneId: segnalazione.id, destinatari },
-      "[DEMO] Invio PEC simulato"
-    );
-    await new Promise((r) => setTimeout(r, 400));
   }
 
-  // Log invio. Il tipo distingue invio reale (SMTP configurato) da demo
-  // (PEC_SMTP_HOST non configurato), per un audit trail accurato.
-  await db.logInvioPec.create({
-    data: {
-      segnalazioneId: id,
-      tipo: pecHost ? "reale" : "demo",
-      destinatari: destinatari.join(";"),
-      oggetto: segnalazione.oggettoPec ?? "",
-      esito,
-      messaggioErrore,
-    },
-  });
-
-  if (esito === "errore") {
-    // Reset del rate limit per l'utente: l'errore SMTP è transient
-    // (network blip, SMTP server down, autenticazione temporaneamente
-    // fallita), non un abuso. Senza questo reset, 5 errori SMTP
-    // consecutivi bloccherebbero l'utente per 1 ora, impedendo di
-    // ritentare l'invio PEC una volta risolto il problema di infrastruttura.
-    resetRateLimit(`pec:${user.id}`);
-    // M4: non rivelare dettagli SMTP al client; l'errore è nel log DB
+  // Corpo della lettera: generaTestoLettera include il testo introduttivo del
+  // volontario, così anteprima (lettera/route.ts) e invio reale coincidono.
+  const letteraContext = await buildLetteraContextFromSegnalazione(id);
+  const testoPec = generaTestoLettera(letteraContext);
+  if (testoPec.includes(PEC_MITTENTE_NON_CONFIGURATA)) {
     return NextResponse.json(
-      { error: "Errore durante l'invio della PEC. Il dettaglio è registrato nei log di sistema. Contatta l'amministrazione se il problema persiste." },
-      { status: 500 }
+      { error: "Indirizzo PEC del mittente non configurato. Imposta PEC_FROM prima di inviare." },
+      { status: 400 },
     );
   }
 
-  // Update atomica con clausola WHERE su stato="approvata": previene race
-  // condition tra findUnique e update (lo stato potrebbe cambiare
-  // concorrentemente, ad es. un admin cambia stato manualmente). Se count=0,
-  // lo stato è cambiato: 409 Conflict. L'invio SMTP è già avvenuto, ma lo
-  // stato non viene aggiornato → l'audit trail resta coerente (log PEC
-  // registrato, segnalazione resta "approvata", l'utente può ritentare).
-  const result = await db.segnalazione.updateMany({
-    where: { id, stato: "approvata" },
-    data: {
-      stato: "inviata",
-      numeroProtocollo,
-      dataInvio: new Date(),
-    },
-  });
-  if (result.count === 0) {
-    // Race condition: lo stato non è più "approvata" (qualcuno lo ha
-    // cambiato concorrentemente tra findUnique e updateMany). L'invio
-    // SMTP è avvenuto e il numero di protocollo è stato comunque
-    // assegnato alla segnalazione (campo `numeroProtocollo` salvato
-    // persistentemente dalla funzione `generaNumeroProtocollo`).
-    // Lo stato NON è transitato a "inviata": l'utente deve ricaricare
-    // e verificare. Lo esponiamo esplicitamente per evitare che l'utente
-    // ritenti l'invio credendo che non sia avvenuto, generando un
-    // secondo invio SMTP duplicato con un nuovo numero di protocollo.
+  // La prenotazione è persistente e precedente all'invio. La transazione
+  // serializza i tentativi sul lock della pratica e rifiuta una prenotazione
+  // esistente anche se il lease temporaneo è scaduto. Se il DB non riesce a
+  // salvarla, nessuna richiesta SMTP viene eseguita.
+  let tentativo: { id: string } | null;
+  try {
+    tentativo = await db.$transaction(async (tx) => {
+      const corrente = await tx.segnalazione.updateMany({
+        where: { id, stato: "approvata", invioPecLockToken: token },
+        data: { invioPecLockAt: new Date() },
+      });
+      if (corrente.count !== 1) return null;
+      const giaInviata = await tx.logInvioPec.findFirst({
+        where: { segnalazioneId: id, tipo: "reale", esito: { in: ["in_corso", "incerto", "ok"] } },
+        select: { id: true },
+      });
+      if (giaInviata) return null;
+      return tx.logInvioPec.create({
+        data: {
+          segnalazioneId: id,
+          tipo: "reale",
+          destinatari: destinatari.join(";"),
+          oggetto: segnalazione.oggettoPec ?? "",
+          esito: "in_corso",
+          messaggioErrore: null,
+        },
+      });
+    });
+  } catch (e) {
+    logger.error({ err: e, segnalazioneId: id }, "Prenotazione invio PEC fallita prima di SMTP");
+    return NextResponse.json(
+      { error: "Impossibile registrare il tentativo PEC: nessun invio effettuato." },
+      { status: 503 },
+    );
+  }
+  if (!tentativo) {
+    return NextResponse.json(
+      { error: "Stato, lease o esito PEC modificati durante la preparazione. Non ripetere l'invio senza verifica." },
+      { status: 409 },
+    );
+  }
+
+  try {
+    const risposta = await getTransporter(smtp).sendMail({
+      from: fromAddress,
+      to: destinatari.join(", "),
+      subject: segnalazione.oggettoPec ?? "Segnalazione",
+      text: testoPec,
+      attachments: smtpAttachments,
+    });
+    // Nodemailer può risolvere la Promise quando accetta almeno un CC ma
+    // rifiuta il Comune. Anche una consegna parziale richiede riconciliazione.
+    if (!destinatari.every((dest) => risposta.accepted?.some((a) => a.toLowerCase() === dest.toLowerCase()))) {
+      throw new Error("Il server SMTP non ha accettato tutti i destinatari PEC");
+    }
+  } catch (e) {
+    logger.error({ err: e, segnalazioneId: id }, "Esito invio PEC incerto o consegna parziale");
+    try {
+      await db.logInvioPec.update({
+        where: { id: tentativo.id },
+        data: { esito: "incerto", messaggioErrore: messaggioDaErrore(e) },
+      });
+    } catch (logErr) {
+      // Il record in_corso resta comunque a bloccare i retry automatici.
+      logger.error({ err: logErr, segnalazioneId: id }, "Registrazione esito incerto PEC fallita");
+    }
+    return NextResponse.json(
+      {
+        error:
+          "Esito PEC incerto. Non ritentare l'invio: verificare prima la casella PEC e i log con l'amministrazione.",
+        invioSmtpIncerto: true,
+        protocolloAssegnato: numeroProtocollo,
+      },
+      { status: 500 },
+    );
+  }
+
+  // Il record in_corso blocca i retry anche se l'aggiornamento del log
+  // fallisce dopo la consegna. Non far dipendere la transizione dallo storico.
+  try {
+    await db.logInvioPec.update({ where: { id: tentativo.id }, data: { esito: "ok", messaggioErrore: null } });
+  } catch (e) {
+    logger.error({ err: e, segnalazioneId: id }, "Registrazione esito positivo PEC fallita");
+  }
+
+  // Transizione di stato e storico nella stessa transazione. Se lo stato non è
+  // più "approvata" (modifica concorrente), la transazione non scrive nulla.
+  let transizione: boolean;
+  try {
+    transizione = await db.$transaction(async (tx) => {
+      const result = await tx.segnalazione.updateMany({
+        where: { id, stato: "approvata", invioPecLockToken: token },
+        data: { stato: "inviata", numeroProtocollo, dataInvio: new Date() },
+      });
+      if (result.count === 0) return false;
+      await tx.storicoStato.create({
+        data: {
+          segnalazioneId: id,
+          statoPrecedente: "approvata",
+          statoNuovo: "inviata",
+          userId: user.id,
+          nota: `PEC inviata a: ${destinatari.join(", ")}. Protocollo: ${numeroProtocollo}`,
+        },
+      });
+      return true;
+    });
+  } catch (e) {
+    logger.error({ err: e, segnalazioneId: id }, "Aggiornamento stato dopo invio PEC fallito");
+    return NextResponse.json(
+      {
+        error: `La PEC è stata inviata ma lo stato della segnalazione non è stato aggiornato. Non ritentare l'invio. Protocollo assegnato: ${numeroProtocollo}. Contatta l'amministrazione.`,
+        protocolloAssegnato: numeroProtocollo,
+        invioSmtpAvvenuto: true,
+      },
+      { status: 500 },
+    );
+  }
+
+  if (!transizione) {
     return NextResponse.json(
       {
         error:
           "La segnalazione non è più in stato 'approvata' (modifica concorrente). " +
-          `ATTENZIONE: l'invio SMTP è AVVENUTO e il numero di protocollo "${numeroProtocollo}" ` +
-          "è stato comunque assegnato alla segnalazione. Lo stato NON è transitato a 'inviata'. " +
-          "Non ritentare l'invio (genererebbe un duplicato PEC con nuovo protocollo). " +
+          `ATTENZIONE: l'invio SMTP è AVVENUTO con protocollo "${numeroProtocollo}", ` +
+          "ma lo stato NON è transitato a 'inviata'. Il protocollo resta assegnato alla pratica. " +
+          "Non ritentare l'invio (genererebbe un duplicato PEC). " +
           "Ricarica la pagina e verifica lo stato attuale, o contatta l'amministrazione.",
         protocolloAssegnato: numeroProtocollo,
         invioSmtpAvvenuto: true,
       },
-      { status: 409 }
+      { status: 409 },
     );
   }
 
   const aggiornata = await db.segnalazione.findUnique({ where: { id } });
 
-  await db.storicoStato.create({
-    data: {
-      segnalazioneId: id,
-      statoPrecedente: "approvata",
-      statoNuovo: "inviata",
-      userId: user.id,
-      nota: `PEC inviata a: ${destinatari.join(", ")}. Protocollo: ${numeroProtocollo}`,
-    },
+  // Notifica email al volontario e al referente. Non bloccante: gli errori sono loggati.
+  notificaPecInviata(id).catch((e: unknown) => {
+    logger.error({ err: e, segnalazioneId: id }, "Notifica dopo invio PEC fallita");
   });
-
-  // Notifica email al volontario e referente (async, non bloccante)
-  void notificaPecInviata(id);
 
   return NextResponse.json({
     segnalazione: aggiornata,

@@ -1,5 +1,5 @@
 /**
- * Dati statici di esempio mostrati in modalità demo (vedi demo-mode.ts).
+ * Dati statici usati dagli account di accesso dimostrativi (vedi demo-mode.ts).
  *
  * Sono incorporati nel bundle JavaScript: non provengono dal database e
  * non richiedono alcuna connessione di rete. Servono solo a dare un'idea
@@ -13,6 +13,7 @@
 import type { Segnalazione, StatoSegnalazione } from "@/lib/types";
 
 export const DEMO_STATS = {
+  sogliaGiorni: 30,
   totali: 5,
   bozze: 1,
   inRevisione: 1,
@@ -25,7 +26,9 @@ export const DEMO_STATS = {
   inAttesaOverdue: 1,
 };
 
-function creaSegnalazioneDemo(overrides: Partial<Segnalazione> & { id: string; stato: StatoSegnalazione }): Segnalazione {
+function creaSegnalazioneDemo(
+  overrides: Partial<Segnalazione> & { id: string; stato: StatoSegnalazione },
+): Segnalazione {
   const base: Segnalazione = {
     id: overrides.id,
     numeroProtocollo: null,
@@ -34,9 +37,9 @@ function creaSegnalazioneDemo(overrides: Partial<Segnalazione> & { id: string; s
     volontarioId: "demo-volontario",
     referenteApprovatoreId: null,
     notaRifiuto: null,
-    indirizzoVia: "Via Esempio 1",
+    indirizzoVia: "Via Roma 12",
     comuneId: 1,
-    cap: "00000",
+    cap: "24049",
     provinciaId: 1,
     regioneId: 1,
     latitudine: null,
@@ -64,10 +67,24 @@ function creaSegnalazioneDemo(overrides: Partial<Segnalazione> & { id: string; s
     livelloRecidiva: 1,
     createdAt: "2026-05-10T09:00:00.000Z",
     updatedAt: "2026-05-10T09:00:00.000Z",
-    comune: { id: 1, nome: "Comune Esempio", pecComune: "protocollo@pec.comune-esempio.it", nomeSindaco: "Nome Cognome" },
-    provincia: { id: 1, sigla: "EX", nome: "Provincia Esempio" },
-    regione: { id: 1, regione: "REGIONE ESEMPIO", riferimentoLegge: "Legge Regionale di esempio n.1/26" },
-    volontario: { id: "demo-volontario", nomeCognome: "Volontario Demo", email: "volontario@demo.cielobuio-segnalazioni.local" },
+    comune: {
+      id: 1,
+      nome: "Castelvetro Lombardo",
+      pecComune: "protocollo@pec.castelvetro-lombardo.it",
+      nomeSindaco: "Marta Rossi",
+    },
+    provincia: { id: 1, sigla: "BG", nome: "Bergamo" },
+    regione: {
+      id: 1,
+      regione: "LOMBARDIA",
+      riferimentoLegge:
+        "Legge Regionale della Lombardia n.31/2015 (art. 11, comma 2: disposizioni transitorie della L.R. 17/2000)",
+    },
+    volontario: {
+      id: "demo-volontario",
+      nomeCognome: "Giulia Ferri",
+      email: "volontario@demo.cielobuio-segnalazioni.local",
+    },
     allegati: [],
     storicoStati: [],
   };
@@ -81,7 +98,7 @@ export const DEMO_SEGNALAZIONI: Segnalazione[] = [
     indirizzoVia: "Via dei Platani 4",
     nomeEsercizio: "Capannone dismesso",
     chkLuceVersoAlto: true,
-    descrizioneLibera: "Esempio di bozza non ancora inviata al referente.",
+    descrizioneLibera: "Bozza non ancora inviata al referente.",
   }),
   creaSegnalazioneDemo({
     id: "demo-2",
@@ -89,7 +106,7 @@ export const DEMO_SEGNALAZIONI: Segnalazione[] = [
     indirizzoVia: "Via Garibaldi 22",
     chkVetroPianoInclinato: true,
     chkLuceIntrusiva: true,
-    descrizioneLibera: "Esempio di segnalazione in attesa di revisione da parte del referente territoriale.",
+    descrizioneLibera: "Segnalazione in attesa di revisione da parte del referente territoriale.",
   }),
   creaSegnalazioneDemo({
     id: "demo-3",
@@ -98,29 +115,31 @@ export const DEMO_SEGNALAZIONI: Segnalazione[] = [
     chkVetroCurvo: true,
     chkAbbagliamento: true,
     referenteApprovatoreId: "demo-referente",
-    destinatarioNome: "Sindaco Esempio",
+    destinatarioNome: "Sindaco di Castelvetro Lombardo",
   }),
   creaSegnalazioneDemo({
     id: "demo-4",
     stato: "inviata",
-    // Formato YYYYMMGG a 8 cifre (12 maggio 2026, coerente con dataInvio).
-    numeroProtocollo: "20260512-REG-EX-DM01",
+    // Formato YYYYMMGG a 8 cifre (12 maggio 2026, coerente con dataSegnalazione).
+    numeroProtocollo: "20260512-LOM-BG-GF01",
+    dataSegnalazione: "2026-05-12T08:00:00.000Z",
     indirizzoVia: "Via dell'Industria 5",
     chkLuceVersoAlto: true,
     chkAbbagliamento: true,
     referenteApprovatoreId: "demo-referente",
-    destinatarioNome: "Sindaco Esempio",
+    destinatarioNome: "Sindaco di Castelvetro Lombardo",
     dataInvio: "2026-05-12T10:30:00.000Z",
   }),
   creaSegnalazioneDemo({
     id: "demo-5",
     stato: "in_attesa",
-    // Formato YYYYMMGG a 8 cifre (5 maggio 2026, coerente con dataInvio).
-    numeroProtocollo: "20260505-REG-EX-DM01",
+    // Formato YYYYMMGG a 8 cifre (5 maggio 2026, coerente con dataSegnalazione).
+    numeroProtocollo: "20260505-LOM-BG-GF01",
+    dataSegnalazione: "2026-05-05T07:00:00.000Z",
     indirizzoVia: "Via del Porto 9",
     chkLuceIntrusiva: true,
     referenteApprovatoreId: "demo-referente",
-    destinatarioNome: "Sindaco Esempio",
+    destinatarioNome: "Sindaco di Castelvetro Lombardo",
     dataInvio: "2026-05-05T08:15:00.000Z",
   }),
 ];

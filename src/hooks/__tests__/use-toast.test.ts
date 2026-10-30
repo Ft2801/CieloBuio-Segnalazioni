@@ -4,7 +4,8 @@
  * addToRemoveQueue, genId, TOAST_LIMIT behavior.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import * as React from "react";
+import { renderHook, act, render, screen } from "@testing-library/react";
 import { useToast, toast, reducer, __resetToastStateForTests } from "@/hooks/use-toast";
 
 // Resetta lo stato globale tra i test per evitare contaminazione
@@ -161,21 +162,37 @@ describe("toast function", () => {
     expect(t1.id).not.toBe(t2.id);
   });
 
-  it("toast().update() aggiorna il toast", () => {
-    const t = toast({ title: "Originale" });
-    t.update({ id: t.id, title: "Aggiornato" });
-    // Verifica indiretta: lo stato interno è aggiornato
-    // (non possiamo ispezionare memoryState direttamente, ma non deve lanciare)
+  it("toast().update() aggiorna il toast nello stato osservabile", () => {
+    const { result } = renderHook(() => useToast());
+    let t!: ReturnType<typeof toast>;
+    act(() => {
+      t = toast({ title: "Originale" });
+    });
+    act(() => {
+      t.update({ id: t.id, title: "Aggiornato" });
+    });
+    expect(result.current.toasts[0].title).toBe("Aggiornato");
   });
 
-  it("toast().dismiss() rimuove il toast dopo il timeout", () => {
-    const t = toast({ title: "Test" });
-    t.dismiss();
-    // Avanza il tempo per triggerare il REMOVE_TOAST
+  it("toast().dismiss() chiude subito il toast e lo rimuove dopo 5 secondi", () => {
+    const { result } = renderHook(() => useToast());
+    let t!: ReturnType<typeof toast>;
     act(() => {
-      vi.advanceTimersByTime(6000);
+      t = toast({ title: "Test" });
     });
-    // Lo stato interno dovrebbe essere pulito
+    act(() => {
+      t.dismiss();
+    });
+    expect(result.current.toasts[0].open).toBe(false);
+    // Il ritardo di rimozione è di 5000 ms: prima resta in coda, allo scadere viene eliminato.
+    act(() => {
+      vi.advanceTimersByTime(4999);
+    });
+    expect(result.current.toasts).toHaveLength(1);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current.toasts).toHaveLength(0);
   });
 });
 
@@ -281,5 +298,45 @@ describe("useToast hook", () => {
     });
     // Tutti i toast devono essere chiusi
     expect(result.current.toasts.every((t) => t.open === false)).toBe(true);
+  });
+});
+
+describe("toast - durata di default per tipo", () => {
+  it("usa 12000 ms per gli errori e 6000 ms per le informazioni quando la durata non è indicata", () => {
+    const { result } = renderHook(() => useToast());
+    act(() => {
+      toast({ title: "Errore", variant: "destructive" });
+      toast({ title: "Informazione" });
+    });
+    const durate = Object.fromEntries(result.current.toasts.map((t) => [t.title, t.duration]));
+    expect(durate["Errore"]).toBe(12000);
+    expect(durate["Informazione"]).toBe(6000);
+  });
+});
+
+describe("toast - durata esplicita", () => {
+  it("usa la durata indicata dal chiamante", () => {
+    const { result } = renderHook(() => useToast());
+    act(() => {
+      toast({ title: "Durata", duration: 1234 });
+    });
+    expect(result.current.toasts[0]?.duration).toBe(1234);
+  });
+});
+
+describe("useToast - iscrizione dopo l'emissione", () => {
+  it("mostra un toast emesso da un effect eseguito prima dell'iscrizione del hook", () => {
+    function Emissore() {
+      React.useEffect(() => {
+        toast({ title: "Emesso prima dell'iscrizione" });
+      }, []);
+      return null;
+    }
+    function Ascoltatore() {
+      const { toasts } = useToast();
+      return React.createElement("div", { "data-testid": "conteggio" }, String(toasts.length));
+    }
+    render(React.createElement(React.Fragment, null, React.createElement(Emissore), React.createElement(Ascoltatore)));
+    expect(screen.getByTestId("conteggio").textContent).toBe("1");
   });
 });

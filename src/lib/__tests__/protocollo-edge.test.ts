@@ -1,15 +1,14 @@
 /**
  * Test per i rami residui di protocollo.ts:
- * - getInizialiSegnalatore: fallback length < 2 (riga 89)
- * - generaNumeroProtocollo: progressivo >= 100 (riga 192)
- * - getRegioneCodice: fallback con warning logger
+ * - getInizialiSegnalatore: fallback per iniziali troppo corte o assenti
+ * - generaNumeroProtocollo: progressivo a tre cifre quando il conteggio supera 99
+ * - getRegioneCodice: errore esplicito per regioni vuote o non mappate
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getInizialiSegnalatore, getRegioneCodice } from "@/lib/protocollo";
+import { ErroreProtocollo, getInizialiSegnalatore, getRegioneCodice, generaNumeroProtocollo } from "@/lib/protocollo";
 import { logger } from "@/lib/logger";
 
-// Silenzia i warning logger.warn emessi da getRegioneCodice per regioni non mappate
-// (comportamento atteso nei test di fallback)
+// Silenzia i warning logger.warn emessi dal retry del progressivo
 beforeEach(() => {
   vi.spyOn(logger, "warn").mockImplementation(() => {});
 });
@@ -47,46 +46,32 @@ describe("getInizialiSegnalatore - rami fallback", () => {
   });
 });
 
-describe("getRegioneCodice - rami fallback", () => {
-  it("ritorna prime 3 lettere per regione sconosciuta di 3+ caratteri", () => {
-    // "MARTE" non è nella tabella, ritorna "MAR"
-    expect(getRegioneCodice("MARTE")).toBe("MAR");
+describe("getRegioneCodice - regioni non valide", () => {
+  it("lancia ErroreProtocollo per regione vuota", () => {
+    expect(() => getRegioneCodice("")).toThrow(ErroreProtocollo);
   });
 
-  it("ritorna prime 2 lettere per regione sconosciuta di 2 caratteri", () => {
-    // "AB" non è nella tabella, ritorna "AB" (slice 0,3 = "AB")
-    expect(getRegioneCodice("AB")).toBe("AB");
+  it("lancia ErroreProtocollo per regione di soli spazi", () => {
+    expect(() => getRegioneCodice("   ")).toThrow(ErroreProtocollo);
   });
 
-  it("ritorna stringa vuota per stringa di 1 carattere", () => {
-    expect(getRegioneCodice("A")).toBe("A");
+  it("lancia ErroreProtocollo per regione non mappata, senza fallback", () => {
+    expect(() => getRegioneCodice("MARTE")).toThrow(ErroreProtocollo);
+    expect(() => getRegioneCodice("A")).toThrow(ErroreProtocollo);
   });
 
-  it("ritorna stringa vuota per stringa vuota", () => {
-    expect(getRegioneCodice("")).toBe("XXX");
+  it("il messaggio indica la regione non riconosciuta", () => {
+    expect(() => getRegioneCodice("ZZZ-YYY")).toThrow(/ZZZ-YYY/);
   });
 
-  it("gestisce regione con trattini non mappata", () => {
-    // Non nella tabella, fallback prime 3 lettere normalizzate
-    expect(getRegioneCodice("ZZZ-YYY")).toBe("ZZZ");
-  });
-
-  it("emette un warning logger.warn per regione non mappata", () => {
-    const warnSpy = vi.spyOn(logger, "warn");
-    getRegioneCodice("REGIONE_INESISTENTE");
-    expect(warnSpy).toHaveBeenCalled();
-    // logger.warn({ regione, fallback }, "msg") -> args[0] è l'oggetto,
-    // args[1] è il messaggio.
-    expect(warnSpy.mock.calls[0][0]).toEqual(
-      expect.objectContaining({ regione: "REGIONE_INESISTENTE" })
-    );
-    expect(warnSpy.mock.calls[0][1]).toContain("Regione non mappata");
-  });
-
-  it("NON emette warning per regione mappata", () => {
-    const warnSpy = vi.spyOn(logger, "warn");
-    getRegioneCodice("LOMBARDIA");
-    expect(warnSpy).not.toHaveBeenCalled();
+  it("riporta il nome della classe per il controllo nelle route", () => {
+    try {
+      getRegioneCodice("REGIONE_INESISTENTE");
+      throw new Error("atteso errore");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ErroreProtocollo);
+      expect((e as Error).name).toBe("ErroreProtocollo");
+    }
   });
 });
 
@@ -100,7 +85,6 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import { db } from "@/lib/db";
-import { generaNumeroProtocollo } from "@/lib/protocollo";
 
 describe("generaNumeroProtocollo - progressivo >= 100", () => {
   beforeEach(() => {
@@ -110,7 +94,7 @@ describe("generaNumeroProtocollo - progressivo >= 100", () => {
   it("gestisce progressivo >= 100 con 3+ cifre", async () => {
     // count ritorna 99, progressivo = 99 + 1 + 0 = 100 -> 3 cifre
     vi.mocked(db.segnalazione.count).mockResolvedValue(99);
-    vi.mocked(db.segnalazione.updateMany).mockResolvedValue({ count: 1 } as any);
+    vi.mocked(db.segnalazione.updateMany).mockResolvedValue({ count: 1 } as never);
 
     const result = await generaNumeroProtocollo({
       data: new Date(2026, 0, 15),

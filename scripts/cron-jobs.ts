@@ -2,31 +2,33 @@
  * Script di maintenance periodico da eseguire via cron (es. giornalmente).
  *
  * Effettua:
- * - I1: transizione automatica delle pratiche "inviata" più vecchie di
- *   TRANSIZIONE_INVIATA_GIORNI (default 7) allo stato "in_attesa"
- * - I7: pulizia delle sessioni scadute dal DB
- * - GDPR: anonimizzazione delle segnalazioni più vecchie di
- *   RETENTION_SEGNALAZIONI_ANNI (default 10) come da PRIVACY.md.
+ * - transizione automatica delle pratiche "inviata" più vecchie di
+ *   TRANSIZIONE_INVIATA_GIORNI (default 7) allo stato "in_attesa";
+ * - pulizia delle sessioni scadute dal database;
+ * - anonimizzazione GDPR delle segnalazioni più vecchie di
+ *   RETENTION_SEGNALAZIONI_ANNI (default 10), come da PRIVACY.md.
  *   L'anonimizzazione (non la cancellazione) preserva il valore
- *   statistico/audit della segnalazione rimuovendo i dati personali
- *   del volontario e dell'indirizzo, in conformità all'art. 5.1.e
- *   del GDPR ("limitazione della conservazione").
+ *   statistico e l'audit della segnalazione rimuovendo i dati personali
+ *   del volontario e dell'indirizzo, in conformità all'art. 5.1.e del GDPR
+ *   ("limitazione della conservazione").
  *
  * La logica è centralizzata in `src/lib/cron-utils.ts` e condivisa con
  * `POST /api/reminder` (esecuzione manuale admin) per evitare drift.
  *
- * Concurrency safety: acquisiamo un PostgreSQL advisory lock all'inizio
- * per prevenire esecuzioni concorrenti (cron che si sovrappone a trigger
- * manuale admin, o cron che riparte prima che la precedente finisca).
- * Se il lock è già preso, lo script esce silenziosamente con codice 0.
+ * Concorrenza: una transazione acquisisce un PostgreSQL advisory lock
+ * transazionale (pg_try_advisory_xact_lock) e la sequenza di maintenance viene
+ * eseguita mentre la transazione è aperta. Il lock è legato alla transazione,
+ * quindi viene rilasciato automaticamente al commit o al rollback, anche in
+ * caso di crash. Se il lock è già preso, lo script esce con codice 0 senza
+ * eseguire nulla.
  *
- * Esempio cron (ogni giorno alle 3:00):
+ * Esempio cron (ogni giorno alle 3:00, con TZ=Europe/Rome):
  *   0 3 * * * cd /path/to/project && npm run cron:reminder >> logs/cron.log 2>&1
  *
  * Autore: Fabio Tempera (2026)
  */
 
-import { PrismaClient } from "@prisma/client";
+import { db } from "../src/lib/db";
 import {
   cleanupSessioniScadute,
   transizioneAutomaticaInviata,
@@ -36,40 +38,43 @@ import {
 } from "../src/lib/cron-utils";
 import { logger } from "../src/lib/logger";
 
-// Chiave numerica per il PostgreSQL advisory lock. Deve essere stabile
-// tra release (non cambiarla senza considerare le esecuzioni concorrenti
-// in corso durante il deploy). 0x4349424F = "CIBO" in ASCII (mnemonico
-// per CieloBuio).
+// Chiave numerica per il PostgreSQL advisory lock. Deve restare stabile tra
+// release: cambiarla durante un deploy non impedirebbe le esecuzioni
+// concorrenti. 0x4349424F = "CIBO" in ASCII (mnemonico per CieloBuio).
 const CRON_ADVISORY_LOCK_KEY = 0x4349424f;
 
-const db = new PrismaClient();
+// Durata massima della transazione che tiene il lock. Le transazioni
+// interattive di Prisma hanno un timeout di 5 secondi di default, troppo
+// breve per l'intera maintenance.
+const TIMEOUT_LOCK_MS = 60 * 60 * 1000;
 
 /**
- * Tenta di acquisire un advisory lock PostgreSQL. Ritorna true se
- * acquisito, false se già preso da un'altra sessione. Usa
- * pg_try_advisory_lock (non blocking) per evitare di attendere.
+ * Esegue la maintenance solo se il lock è libero. Ritorna false se un'altra
+ * esecuzione tiene già il lock. Il lock di transazione viene rilasciato al
+ * termine della transazione.
  */
-async function tryAcquireLock(): Promise<boolean> {
-  const result = await db.$queryRaw<{ acquired: boolean }[]>`
-    SELECT pg_try_advisory_lock(${CRON_ADVISORY_LOCK_KEY}::bigint) AS acquired
-  `;
-  return result[0]?.acquired === true;
-}
-
-async function releaseLock(): Promise<void> {
-  try {
-    await db.$executeRaw`SELECT pg_advisory_unlock(${CRON_ADVISORY_LOCK_KEY}::bigint)`;
-  } catch (e) {
-    logger.warn({ err: e }, "[cron-jobs] Rilascio advisory lock fallito (sessione chiusa?)");
-  }
+async function eseguiConLock(): Promise<boolean> {
+  return db.$transaction(
+    async (tx) => {
+      const righe = await tx.$queryRaw<{ acquired: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(${CRON_ADVISORY_LOCK_KEY}::bigint) AS acquired
+      `;
+      if (righe[0]?.acquired !== true) {
+        return false;
+      }
+      await runCronJobs();
+      return true;
+    },
+    { timeout: TIMEOUT_LOCK_MS, maxWait: 10_000 },
+  );
 }
 
 /**
  * Funzione principale esportata per riuso nei test. Esegue la sequenza
  * di maintenance senza side-effects di processo (exit, disconnect):
- * quei side-effects sono gestiti dal wrapper main() sotto.
+ * quei side-effects sono gestiti dal wrapper run().
  */
-export async function runCronJobs(): Promise<void> {
+async function runCronJobs(): Promise<void> {
   logger.info({ timestamp: new Date().toISOString() }, "Inizio cron jobs...");
 
   // 1. Pulizia sessioni scadute
@@ -81,13 +86,11 @@ export async function runCronJobs(): Promise<void> {
   logger.info({ count: transitate }, "Segnalazioni transitate inviata -> in_attesa");
 
   // 3. Anonimizzazione GDPR: segnalazioni più vecchie di RETENTION_SEGNALAZIONI_ANNI.
-  // L'anonimizzazione rimuove i dati personali del volontario (lat/long,
-  // indirizzo, nomeEsercizio, descrizioneLibera, note) mantenendo il record
-  // per audit/statistica. Il volontarioId viene posto a null (erasing del
-  // legame con l'utente), i campi liberi vengono sovrascritti con un
-  // placeholder "[ANONIMIZZATA]" e le coordinate GPS azzerate.
-  // Gli allegati fisici (immagini potenzialmente identificative) vengono
-  // eliminati da storage/uploads/<id>/ (vedi src/lib/gdpr.ts).
+  // L'anonimizzazione rimuove i dati personali (coordinate, indirizzo, CAP,
+  // nome dell'esercizio, testi liberi e note) e scollega il volontario,
+  // mantenendo il record per audit e statistica. Gli allegati fisici
+  // (immagini potenzialmente identificative) vengono eliminati da
+  // storage/uploads/<id>/ (vedi src/lib/gdpr.ts).
   //
   // La retention è calcolata su `dataChiusura` (campo dedicato, registrato
   // alla chiusura della pratica) e NON su `updatedAt` (che si aggiorna ad
@@ -97,14 +100,13 @@ export async function runCronJobs(): Promise<void> {
   const anonimizzate = await anonimizzaSegnalazioniGdpr(db, null);
   logger.info({ count: anonimizzate, retentionAnni }, "Segnalazioni anonimizzate per GDPR retention");
 
-  // 4. Pulizia file orfani in /storage/uploads
-  // I file fisici degli allegati vengono cancellati durante l'anonimizzazione
-  // GDPR (vedi src/lib/gdpr.ts) e durante la DELETE di una segnalazione
-  // (vedi src/app/api/segnalazioni/[id]/route.ts). Tuttavia, se uno di
-  // quei `rm()` asincroni fallisce (es. permessi, crash del processo),
-  // i file restano orfani sul filesystem senza un record DB corrispondente.
-  // Questo step confronta le directory su filesystem con i record in
-  // tabella allegati e rimuove gli orfani.
+  // 4. Pulizia file orfani in storage/uploads.
+  // I file fisici vengono rimossi durante l'anonimizzazione GDPR (vedi
+  // src/lib/gdpr.ts) e durante la DELETE di una segnalazione (vedi
+  // src/app/api/segnalazioni/[id]/route.ts). Se una di queste rimozioni
+  // fallisce (permessi, crash del processo), i file restano sul filesystem
+  // senza un record DB corrispondente. Questo step confronta le directory
+  // con i record della tabella allegati e rimuove gli orfani.
   const orfaniRimossi = await cleanupFileOrfani(db);
   if (orfaniRimossi > 0) {
     logger.info({ count: orfaniRimossi }, "File orfani rimossi da storage/uploads/");
@@ -114,23 +116,17 @@ export async function runCronJobs(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  // Acquisisci advisory lock per prevenire esecuzioni concorrenti.
-  // pg_try_advisory_lock ritorna immediatamente false se il lock è già
-  // preso: in quel caso usciamo senza errori (la precedente esecuzione
-  // sta ancora girando).
-  const lockAcquired = await tryAcquireLock();
-  if (!lockAcquired) {
+  const eseguito = await eseguiConLock();
+  if (!eseguito) {
     logger.info("[cron-jobs] Un'altra esecuzione è già in corso (advisory lock occupato). Uscita.");
-    return;
-  }
-  try {
-    await runCronJobs();
-  } finally {
-    await releaseLock();
   }
 }
 
-async function run() {
+/**
+ * Punto d'ingresso dello script: esegue la maintenance e gestisce uscita e
+ * chiusura della connessione. Esportata per i test.
+ */
+export async function run(): Promise<void> {
   try {
     await main();
   } catch (e) {
@@ -140,5 +136,3 @@ async function run() {
   }
   await db.$disconnect();
 }
-
-run();

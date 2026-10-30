@@ -1,20 +1,19 @@
 /**
  * API: POST /api/auth/login
  * Login con email, password e (opzionale) codice TOTP 2FA. Crea sessione.
- * Rate limiting: 3 tentativi per IP e per email, poi escalation blocchi
+ * Rate limiting: 20 tentativi per IP e 3 per email, poi escalation dei blocchi
  * (5 min -> 15 min -> 1 ora -> 24 ore). Vedi src/lib/rate-limit.ts.
  *
- * Il rate limit doppio (IP + email) previene il bypass via header
- * X-Forwarded-For spoofabile: anche se un attaccante ruota l'IP, non può
- * superare 3 tentativi per singola email target. Viceversa, un attaccante
- * che prova tante email diverse dallo stesso IP è comunque bloccato.
+ * Il rate limit doppio (IP + email) resta efficace anche se un attaccante
+ * ruota l'IP: non può superare 3 tentativi per singola email target. Viceversa,
+ * un attaccante che prova tante email diverse dallo stesso IP è comunque
+ * bloccato. L'IP reale è letto solo da X-Real-IP (impostato da Caddy).
  *
  * Mitigazione timing side-channel: se l'utente non esiste, eseguiamo
- * comunque bcrypt.compare con un hash pre-calcolato (cost 12) per
- * uniformare i tempi di risposta e impedire l'user enumeration via
- * timing. L'hash di riferimento è derivato da una password fissa nota
- * al sistema, ma il risultato non è mai usato (verifichiamo sempre
- * l'hash reale quando l'utente esiste).
+ * comunque bcrypt.compare con un hash sentinella (cost 12) per uniformare
+ * i tempi di risposta e impedire l'user enumeration via timing. La
+ * sentinella è generata all'avvio del processo da una password casuale
+ * che non viene mai esposta; il risultato del confronto non è mai usato.
  *
  * 2FA TOTP: se l'utente ha configurato e verificato un secret TOTP
  * (User.totpSecret non null E User.totpVerifiedAt non null), il login
@@ -33,43 +32,41 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import {
-  verifyPassword,
-  hashPassword,
-  createSession,
-  setSessionCookie,
-} from "@/lib/auth";
+import { verifyPassword, hashPassword, createSession, setSessionCookie, CredenzialiCambiate } from "@/lib/auth";
 import { checkRateLimit, resetRateLimit } from "@/lib/rate-limit";
 import { verifyTotpWithDelta, computeTotpTimestep } from "@/lib/totp";
 import { logger } from "@/lib/logger";
+import { leggiBodyOggetto } from "@/lib/http";
+import { registraTimestepTotp } from "@/lib/totp-replay";
+import { randomBytes } from "crypto";
 
 function getClientIp(req: NextRequest): string {
-  // Preferisci X-Real-IP (impostato dal reverse proxy trust, non dal
-  // client) rispetto a X-Forwarded-For (che può essere spoofato dal
-  // client se il reverse proxy non lo riscrive). In produzione dietro
-  // Caddy, configura Caddy per impostare X-Real-IP dal remote_ip e
-  // per sovrascrivere eventuali X-Forwarded-For client-supplied.
+  // X-Real-IP è impostato dal reverse proxy (Caddy) a partire dall'IP reale
+  // della connessione. X-Forwarded-For non è mai usato: il client può
+  // falsificarlo e aggirare il rate limit per IP. Senza il proxy (sviluppo
+  // locale) tutte le richieste condividono il bucket "unknown", che è il
+  // comportamento sicuro (fail-closed). Requisito di deploy: l'applicazione
+  // non deve essere raggiungibile direttamente, ma solo tramite Caddy.
   const real = req.headers.get("x-real-ip");
   if (real && real.trim()) return real.trim();
-  const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
   return "unknown";
 }
 
-// Hash bcrypt di una password fissa nota al sistema, usato come
-// "sentinella" per uniformare i tempi di risposta quando l'utente non
-// esiste. L'hash è pre-calcolato eagerly all'import del modulo (non
-// lazy) per evitare che il primissimo login fallito dopo l'avvio del
-// processo paghi il costo di bcrypt.compare più il costo di
-// bcrypt.hash per la generazione della sentinella, rivelando così un
-// timing side-channel che distinguerebbe il primo login fallito dai
-// successivi.
+// Hash bcrypt "sentinella" usato per uniformare i tempi di risposta quando
+// l'utente non esiste. È calcolato all'import del modulo (non in modo lazy),
+// così il primo login fallito dopo l'avvio non paga anche il costo della
+// generazione dell'hash, che renderebbe distinguibile la prima richiesta.
 const sentinelHashPromise: Promise<string> = hashPassword(
-  "sentinel-password-not-used-for-auth-" + Math.random()
+  "sentinel-password-not-used-for-auth-" + randomBytes(32).toString("hex"),
 );
 async function getSentinelHash(): Promise<string> {
   return sentinelHashPromise;
 }
+
+// Tentativi per IP prima del blocco. Il limite è più alto di quello per email
+// perché più utenti possono condividere lo stesso IP pubblico (rete d'ufficio):
+// un limite basso permetterebbe a un solo client di bloccare tutti gli altri.
+const LIMITE_TENTATIVI_IP = 20;
 
 export async function POST(req: NextRequest) {
   const ip = getClientIp(req);
@@ -77,25 +74,19 @@ export async function POST(req: NextRequest) {
 
   // Pre-flight: parsa il body per estrarre l'email prima del rate limit,
   // così possiamo applicare entrambi i limiti (IP e email).
-  let email = "";
-  let password = "";
-  let totpToken = "";
-  try {
-    const body = await req.json().catch(() => ({}));
-    email = (body.email ?? "").toString().toLowerCase().trim();
-    password = (body.password ?? "").toString();
-    totpToken = (body.totpToken ?? "").toString().trim();
-  } catch {
-    return NextResponse.json(
-      { error: "Body della richiesta non valido" },
-      { status: 400 }
-    );
+  const body = await leggiBodyOggetto(req);
+  if (!body) {
+    return NextResponse.json({ error: "Body della richiesta non valido" }, { status: 400 });
   }
+  const email = (typeof body.email === "string" ? body.email : "").toLowerCase().trim();
+  const password = typeof body.password === "string" ? body.password : "";
+  const totpToken = typeof body.totpToken === "string" ? body.totpToken.trim() : "";
 
-  const emailRateLimitKey = email ? `login:email:${email}` : null;
+  const chiaveEmail = (e: string) => `login:email:${e}`;
+  const emailRateLimitKey = email ? chiaveEmail(email) : null;
 
-  // Rate limit per IP (3 tentativi, escalation)
-  const ipRl = checkRateLimit(ipRateLimitKey);
+  // Rate limit per IP (LIMITE_TENTATIVI_IP tentativi, poi escalation)
+  const ipRl = checkRateLimit(ipRateLimitKey, LIMITE_TENTATIVI_IP);
   if (!ipRl.allowed) {
     const minuti = Math.ceil(ipRl.retryAfterSeconds / 60);
     // Messaggio chiaro e univoco per l'utente finale: indica il motivo
@@ -113,11 +104,11 @@ export async function POST(req: NextRequest) {
         headers: {
           "Retry-After": String(ipRl.retryAfterSeconds),
         },
-      }
+      },
     );
   }
 
-  // Rate limit per email (3 tentativi, escalation). Previene brute force
+  // Rate limit per email (3 tentativi di default, poi escalation). Previene brute force
   // su singolo account anche con IP rotante.
   let emailRl = null;
   if (emailRateLimitKey) {
@@ -133,16 +124,13 @@ export async function POST(req: NextRequest) {
           headers: {
             "Retry-After": String(emailRl.retryAfterSeconds),
           },
-        }
+        },
       );
     }
   }
 
   if (!email || !password) {
-    return NextResponse.json(
-      { error: "Email e password sono obbligatorie" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "Email e password sono obbligatorie" }, { status: 400 });
   }
 
   try {
@@ -152,18 +140,12 @@ export async function POST(req: NextRequest) {
     // tempi di risposta. Il risultato NON è mai usato in quel caso.
     if (!user || !user.attivo) {
       await verifyPassword(password, await getSentinelHash());
-      return NextResponse.json(
-        { error: "Credenziali non valide" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Credenziali non valide" }, { status: 401 });
     }
 
     const ok = await verifyPassword(password, user.passwordHash);
     if (!ok) {
-      return NextResponse.json(
-        { error: "Credenziali non valide" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Credenziali non valide" }, { status: 401 });
     }
 
     // 2FA TOTP: se l'utente ha un secret E lo ha verificato (totpVerifiedAt),
@@ -182,13 +164,13 @@ export async function POST(req: NextRequest) {
       if (!totpToken) {
         return NextResponse.json(
           { error: "Autenticazione a due fattori (2FA) richiesta. Inserisci il codice TOTP.", requiresTotp: true },
-          { status: 401 }
+          { status: 401 },
         );
       }
       if (!/^\d{6}$/.test(totpToken)) {
         return NextResponse.json(
           { error: "Codice TOTP non valido (deve essere 6 cifre)", requiresTotp: true },
-          { status: 401 }
+          { status: 401 },
         );
       }
       // Verifica TOTP con delta: il delta è necessario per calcolare
@@ -196,44 +178,39 @@ export async function POST(req: NextRequest) {
       // "ultimo timestep usato" per implementare la protezione
       // anti-replay (RFC 6238 §5.2: il server deve rifiutare tentativi
       // di riusare lo stesso codice TOTP).
-      const totpResult = verifyTotpWithDelta(totpToken, user.totpSecret);
+      const istanteVerifica = new Date();
+      const totpResult = verifyTotpWithDelta(totpToken, user.totpSecret, istanteVerifica.getTime());
       if (!totpResult.valid) {
-        return NextResponse.json(
-          { error: "Codice TOTP non valido", requiresTotp: true },
-          { status: 401 }
-        );
+        return NextResponse.json({ error: "Codice TOTP non valido", requiresTotp: true }, { status: 401 });
       }
-      // Protezione anti-replay: rifiuta se il timestep usato è <= ultimo
-      // timestep registrato per questo utente. Previene il riuso dello
-      // stesso codice entro la finestra di validità (±30s).
-      const usedTimestep = computeTotpTimestep(new Date(), totpResult.delta);
-      if (user.totpLastUsedTimestep != null && usedTimestep <= user.totpLastUsedTimestep) {
+      // Protezione anti-replay atomica: il timestep viene registrato solo se
+      // non è già stato usato. Un codice riusato, anche in richieste
+      // concorrenti, viene rifiutato. Se la registrazione fallisce il login
+      // è negato (fail-closed).
+      const usedTimestep = computeTotpTimestep(istanteVerifica, totpResult.delta);
+      const registrato = await registraTimestepTotp(user.id, usedTimestep, user.totpSecret);
+      if (!registrato) {
         logger.warn({ userId: user.id }, "[login] Tentativo di riuso codice TOTP rifiutato (anti-replay)");
         return NextResponse.json(
-          { error: "Codice TOTP già usato. Attendi un nuovo codice dall'app authenticator.", requiresTotp: true },
-          { status: 401 }
+          {
+            error: "Codice TOTP già usato o fattore modificato. Attendi un nuovo codice dall'app authenticator.",
+            requiresTotp: true,
+          },
+          { status: 401 },
         );
       }
-      // Registra il timestep usato per i prossimi check anti-replay.
-      // Non usiamo una transazione: in caso di race concorrente, l'unico
-      // rischio è che due codici uguali vengano accettati simultaneamente
-      // entro la stessa finestra (casi rari, window di 30s). Il rate
-      // limit sul login limita comunque il numero di tentativi.
-      await db.user.update({
-        where: { id: user.id },
-        data: { totpLastUsedTimestep: usedTimestep },
-      }).catch((e: unknown) => {
-        // Non bloccare il login se l'update fallisce: la protezione
-        // anti-replay è defense-in-depth, non un gate di autenticazione.
-        logger.warn({ err: e, userId: user.id }, "[login] Aggiornamento totpLastUsedTimestep fallito (non bloccante)");
-      });
     }
 
     // Login riuscito: resetta entrambi i rate limit
     resetRateLimit(ipRateLimitKey);
-    if (emailRateLimitKey) resetRateLimit(emailRateLimitKey);
+    // Al successo email è sempre valorizzata (vedi controllo obbligatorietà sopra).
+    resetRateLimit(chiaveEmail(email));
 
-    const token = await createSession(user.id);
+    const token = await createSession(user.id, {
+      passwordHash: user.passwordHash,
+      totpSecret: user.totpSecret,
+      totpVerifiedAt: user.totpVerifiedAt,
+    });
     const res = NextResponse.json({
       ok: true,
       user: {
@@ -246,10 +223,13 @@ export async function POST(req: NextRequest) {
     res.headers.set("Set-Cookie", setSessionCookie(token));
     return res;
   } catch (e) {
+    if (e instanceof CredenzialiCambiate) {
+      return NextResponse.json(
+        { error: "Credenziali non valide: sono cambiate durante l'accesso. Ripeti il login." },
+        { status: 401 },
+      );
+    }
     logger.error({ err: e }, "Errore login");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }

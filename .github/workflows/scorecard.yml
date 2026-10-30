@@ -1,0 +1,51 @@
+# CieloBuio Segnalazioni - Punteggio OpenSSF Scorecard (pratiche di sicurezza della catena di fornitura)
+# Autore: Fabio Tempera (2026)
+
+name: Scorecard
+
+on:
+  push:
+    branches: [main, master]
+  branch_protection_rule:
+  schedule:
+    # Ogni lunedì alle 04:30 UTC.
+    - cron: "30 4 * * 1"
+  workflow_dispatch:
+
+# Permessi minimi a livello di workflow: ogni job dichiara quelli che usa.
+permissions:
+  contents: read
+
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  analisi:
+    name: Analisi OpenSSF Scorecard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+      # Necessario per pubblicare i risultati e rendere verificabile il badge.
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Esecuzione di Scorecard
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Caricamento dei risultati nella scheda Sicurezza
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: results.sarif

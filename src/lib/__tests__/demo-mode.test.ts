@@ -1,7 +1,7 @@
 /**
  * Test completi per src/lib/demo-mode.ts
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   DEMO_ACCOUNTS,
   matchDemoAccount,
@@ -11,8 +11,6 @@ import {
   isDemoSession,
   guardDemoReadOnly,
   DEMO_READONLY_MESSAGE,
-  type DemoAccount,
-  type DemoSessionUser,
 } from "@/lib/demo-mode";
 
 describe("DEMO_ACCOUNTS", () => {
@@ -79,9 +77,34 @@ describe("matchDemoAccount", () => {
   });
 });
 
+// Storage in memoria con la stessa interfaccia di sessionStorage: l'ambiente node
+// dei test non lo fornisce.
+function memoriaSessione(): Storage {
+  const dati = new Map<string, string>();
+  return {
+    get length() {
+      return dati.size;
+    },
+    key: (indice: number) => Array.from(dati.keys())[indice] ?? null,
+    getItem: (chiave: string) => dati.get(chiave) ?? null,
+    setItem: (chiave: string, valore: string) => {
+      dati.set(chiave, String(valore));
+    },
+    removeItem: (chiave: string) => {
+      dati.delete(chiave);
+    },
+    clear: () => dati.clear(),
+  };
+}
+
 describe("demo session lifecycle", () => {
   beforeEach(() => {
+    vi.stubGlobal("sessionStorage", memoriaSessione());
     clearDemoSession();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("activateDemoSession ritorna DemoSessionUser con isDemo=true", () => {
@@ -97,26 +120,25 @@ describe("demo session lifecycle", () => {
     expect(getActiveDemoSession()).toBeNull();
   });
 
-  it("getActiveDemoSession ritorna la sessione dopo activate (se sessionStorage disponibile)", () => {
-    // sessionStorage potrebbe non essere disponibile in ambiente node test
-    try {
-      const testKey = "__test_sessionStorage__";
-      sessionStorage.setItem(testKey, "1");
-      sessionStorage.removeItem(testKey);
-    } catch {
-      // sessionStorage non disponibile in ambiente di test: skip
-      return;
-    }
+  it("getActiveDemoSession ritorna la sessione salvata da activate", () => {
     const account = DEMO_ACCOUNTS[1];
     activateDemoSession(account);
     const session = getActiveDemoSession();
     expect(session).not.toBeNull();
     expect(session?.email).toBe(account.email);
+    expect(session?.isDemo).toBe(true);
+  });
+
+  it("getActiveDemoSession ignora un valore manomesso in sessionStorage", () => {
+    sessionStorage.setItem("cb_demo_session", "{non json");
+    expect(getActiveDemoSession()).toBeNull();
   });
 
   it("clearDemoSession rimuove la sessione", () => {
     activateDemoSession(DEMO_ACCOUNTS[0]);
+    expect(sessionStorage.length).toBe(1);
     clearDemoSession();
+    expect(sessionStorage.length).toBe(0);
     expect(getActiveDemoSession()).toBeNull();
   });
 
@@ -180,7 +202,7 @@ describe("guardDemoReadOnly", () => {
 
 describe("DEMO_READONLY_MESSAGE", () => {
   it("contiene testo esplicativo", () => {
-    expect(DEMO_READONLY_MESSAGE).toContain("sola visualizzazione");
-    expect(DEMO_READONLY_MESSAGE).toContain("account effettivo");
+    expect(DEMO_READONLY_MESSAGE).toContain("questo account");
+    expect(DEMO_READONLY_MESSAGE).toContain("non è consentito");
   });
 });

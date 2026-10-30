@@ -12,7 +12,7 @@ const ctx: LetteraContext = {
   comuneNome: "Verdello",
   pecComune: "protocollo@pec.it",
   indirizzoVia: "Via Tigli 5",
-  cap: "24040",
+  cap: "24049",
   provinciaSigla: "BG",
   regione: "LOMBARDIA",
   riferimentoLegge: "L.R. 31/15",
@@ -39,14 +39,14 @@ const ctx: LetteraContext = {
 };
 
 describe("generaHtmlLettera", () => {
-  it("produce HTML valido con DOCTYPE", () => {
+  it("produce un documento HTML completo con DOCTYPE", () => {
     const html = generaHtmlLettera(ctx);
     expect(html).toContain("<!DOCTYPE html>");
     expect(html).toContain("<html");
     expect(html).toContain("</html>");
   });
 
-  it("contiene il testo della lettera escaped", () => {
+  it("contiene mittente, destinatario e numero di protocollo", () => {
     const html = generaHtmlLettera(ctx);
     expect(html).toContain("Mario Rossi");
     expect(html).toContain("Sindaco Rossi");
@@ -135,7 +135,9 @@ describe("generaTestoLettera - edge cases", () => {
 
   it("non include descrizioneLibera se assente", () => {
     const testo = generaTestoLettera(ctx);
-    // La descrizione libera è undefined nel ctx base
+    // Senza descrizione libera il testo non contiene segnaposto o stringhe "undefined"
+    // e prosegue con la formula di chiusura.
+    expect(testo).not.toContain("undefined");
     expect(testo).toContain("Tutto ci");
   });
 

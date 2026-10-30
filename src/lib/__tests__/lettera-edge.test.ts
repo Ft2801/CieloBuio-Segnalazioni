@@ -26,7 +26,7 @@ const ctxBase: LetteraContext = {
   comuneNome: "Verdello",
   pecComune: "comune@pec.it",
   indirizzoVia: "Via Tigli 5",
-  cap: "24040",
+  cap: "24049",
   provinciaSigla: "BG",
   regione: "LOMBARDIA",
   riferimentoLegge: "L.R. 31/15",
@@ -55,7 +55,7 @@ const ctxBase: LetteraContext = {
 };
 
 describe("generaTestoLettera - rami flag false e ARPA", () => {
-  it("con tutti i flag false, mostra placeholder 'nessuna tipologià e 'nessun problema'", () => {
+  it("con tutti i flag false mostra i placeholder 'nessuna tipologia specificata' e 'nessun problema specificato'", () => {
     const ctx: LetteraContext = {
       ...ctxBase,
       chkVetroPianoInclinato: false,
@@ -115,14 +115,13 @@ describe("generaTestoLettera - rami flag false e ARPA", () => {
     expect(html).not.toContain("ARPA regionale (");
   });
 
-  it("con testoIntroduttivoPec vuoto: non aggiunge riga", () => {
+  it("con testoIntroduttivoPec composto solo da spazi: il testo è identico a quello senza introduzione", () => {
     const ctx: LetteraContext = {
       ...ctxBase,
       testoIntroduttivoPec: "   ",
     };
-    const testo = generaTestoLettera(ctx);
-    // testoIntroduttivoPec.trim() è vuoto, non viene inserito
-    expect(testo).not.toContain("   \n");
+    // testoIntroduttivoPec.trim() è vuoto, quindi non viene inserito nulla
+    expect(generaTestoLettera(ctx)).toBe(generaTestoLettera(ctxBase));
   });
 
   it("con descrizioneLibera: aggiunge la descrizione", () => {
@@ -193,7 +192,7 @@ describe("buildLetteraContextFromSegnalazione - comune null", () => {
       regione: null,
       dataSegnalazione: new Date(2026, 0, 15),
       indirizzoVia: "Via 1",
-      cap: "24040",
+      cap: "24049",
       numeroProtocollo: "P1",
       oggettoPec: "O",
       testoIntroduttivoPec: null,
@@ -209,7 +208,7 @@ describe("buildLetteraContextFromSegnalazione - comune null", () => {
       descrizioneLibera: null,
       destinatarioNome: "Sindaco",
       includiArpa: false,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s1");
     expect(ctx.comuneNome).toBe("");
@@ -217,7 +216,7 @@ describe("buildLetteraContextFromSegnalazione - comune null", () => {
     expect(ctx.destinatarioNome).toBe("Sindaco");
   });
 
-  it("comune null e destinatarioNome null: usa placeholder Sindaco vuoto", async () => {
+  it("destinatarioNome null senza comune: usa 'Sindaco' come fallback", async () => {
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
       id: "s2",
       mittenteVisibile: true,
@@ -248,7 +247,7 @@ describe("buildLetteraContextFromSegnalazione - comune null", () => {
       regione: null,
       dataSegnalazione: new Date(2026, 0, 15),
       indirizzoVia: "Via 1",
-      cap: "24040",
+      cap: "24049",
       numeroProtocollo: "P1",
       oggettoPec: "O",
       testoIntroduttivoPec: null,
@@ -264,10 +263,10 @@ describe("buildLetteraContextFromSegnalazione - comune null", () => {
       descrizioneLibera: null,
       destinatarioNome: null,
       includiArpa: false,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s2");
-    // destinatarioNome null e comune null -> "Sindaco" (con nomeSindaco vuoto)
+    // destinatarioNome null e nessun comune (quindi nessun nomeSindaco): fallback "Sindaco"
     expect(ctx.destinatarioNome).toBe("Sindaco");
   });
 
@@ -299,7 +298,7 @@ describe("buildLetteraContextFromSegnalazione - comune null", () => {
       },
       dataSegnalazione: new Date(2026, 0, 15),
       indirizzoVia: "Via 1",
-      cap: "24040",
+      cap: "24049",
       numeroProtocollo: "P1",
       oggettoPec: "O",
       testoIntroduttivoPec: null,
@@ -315,7 +314,7 @@ describe("buildLetteraContextFromSegnalazione - comune null", () => {
       descrizioneLibera: null,
       destinatarioNome: "Sindaco",
       includiArpa: false,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s3");
     expect(ctx.provinciaSigla).toBe("");

@@ -20,9 +20,9 @@ const ALGORITHM = "SHA1";
  *
  * Nota: il secret NON è derivato dall'email dell'utente (derivarlo
  * ridurrebbe l'entropia a quella dell'email stessa). Il parametro
- * `userEmail` è mantenuto per compatibilità con la firma pubblica
- * esistente, ma NON è usato internamente: il secret è generato in modo
- * totalmente casuale da `otpauth` (20 byte di entropia).
+ * `_userEmail` è accettato per uniformità con le altre funzioni del modulo
+ * e non viene usato: il secret è generato in modo casuale da `otpauth`
+ * (20 byte di entropia).
  */
 export function generateTotpSecret(_userEmail?: string): string {
   const secret = new Secret({ size: 20 });
@@ -59,17 +59,21 @@ export function generateTotpUri(userEmail: string, secretBase32: string): string
  * implementare la protezione anti-replay (RFC 6238 §5.2 richiede
  * che il server rigetti tentativi di riusare lo stesso codice).
  *
+ * Il timestamp passato dal chiamante deve essere lo stesso usato per
+ * calcolare il timestep da registrare, anche se nel frattempo cambia finestra.
+ *
  * La finestra è ±1 step (30 secondi) per tollerare clock drift tra
  * client e server, come raccomandato da RFC 6238.
  */
 export function verifyTotpWithDelta(
   token: string,
-  secretBase32: string
+  secretBase32: string,
+  timestamp: number = Date.now(),
 ): { valid: true; delta: number } | { valid: false } {
   if (!secretBase32 || !token) return { valid: false };
   try {
     const totp = createTotp("", secretBase32);
-    const delta = totp.validate({ token: token.trim(), window: 1 });
+    const delta = totp.validate({ token: token.trim(), window: 1, timestamp });
     if (delta === null) return { valid: false };
     return { valid: true, delta };
   } catch {
@@ -79,7 +83,8 @@ export function verifyTotpWithDelta(
 
 /**
  * Verifica un codice TOTP fornito dall'utente.
- * Ritorna true se il codice è valido per la finestra temporale corrente.
+ * Ritorna true se il codice è valido per la finestra temporale (step corrente
+ * o adiacente, vedi `verifyTotpWithDelta`).
  *
  * Nota: questa funzione NON implementa protezione anti-replay. Per
  * prevenire il riuso dello stesso codice (RFC 6238 §5.2), il chiamante

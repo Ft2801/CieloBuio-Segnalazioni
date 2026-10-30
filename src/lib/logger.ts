@@ -1,18 +1,22 @@
 /**
  * Logger strutturato con Pino.
  *
- * In produzione: log JSON su stdout con livello 'info', redazione automatica
- * dei campi sensibili (passwordHash, token, password, totpSecret e altri).
- * In sviluppo: log pretty-print su stdout con livello 'debug'.
+ * Log JSON su stdout, redazione automatica dei campi sensibili (passwordHash,
+ * token, password, totpSecret, totpPendingSecret e altri).
+ *   - livello: LOG_LEVEL se impostata; altrimenti 'info' in produzione e 'debug' altrove
+ *   - formato: JSON; con LOG_FORMAT=pretty l'output è formattato per la lettura umana
  *
  * Autore: Fabio Tempera (2026)
  */
 import pino from "pino";
+import pkg from "../../package.json";
 
 const isProduction = process.env.NODE_ENV === "production";
 
+const livelloPredefinito = isProduction ? "info" : "debug";
+
 const logger = pino({
-  level: isProduction ? "info" : "debug",
+  level: process.env.LOG_LEVEL ?? livelloPredefinito,
   redact: {
     paths: [
       // Credenziali e segreti di autenticazione
@@ -20,6 +24,7 @@ const logger = pino({
       "password",
       "token",
       "totpSecret",
+      "totpPendingSecret",
       "totpVerifiedAt",
       "secret",
       "otp",
@@ -40,12 +45,14 @@ const logger = pino({
       "user.firma",
       "user.passwordHash",
       "user.totpSecret",
+      "user.totpPendingSecret",
       "user.totpVerifiedAt",
       // Match ricorsivi (qualsiasi profondità)
       "*.passwordHash",
       "*.password",
       "*.token",
       "*.totpSecret",
+      "*.totpPendingSecret",
       "*.totpVerifiedAt",
       "*.secret",
       "*.otp",
@@ -63,6 +70,7 @@ const logger = pino({
       "**.password",
       "**.token",
       "**.totpSecret",
+      "**.totpPendingSecret",
       "**.totpVerifiedAt",
       "**.secret",
       "**.otp",
@@ -91,11 +99,10 @@ const logger = pino({
   },
   base: {
     service: "cielobuio-segnalazioni",
-    version: "1.0.0",
+    version: pkg.version,
   },
-  ...(isProduction
-    ? {}
-    : {
+  ...(process.env.LOG_FORMAT === "pretty"
+    ? {
         transport: {
           target: "pino-pretty",
           options: {
@@ -104,7 +111,8 @@ const logger = pino({
             ignore: "pid,hostname",
           },
         },
-      }),
+      }
+    : {}),
 });
 
 export { logger };
