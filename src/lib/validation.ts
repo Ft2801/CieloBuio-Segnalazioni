@@ -6,12 +6,18 @@
  */
 
 import { z } from "zod";
+import { MAX_ID_DB } from "./http";
 
+/** Chiave primaria PostgreSQL Int (positiva e nei limiti di Int32). */
+export const idDbSchema = z.number().int().min(1).max(MAX_ID_DB);
+
+// Zod 4: il formato email si valida con z.email(). La pipe fa sì che un valore
+// vuoto riceva "Email obbligatoria" e non il messaggio di formato.
 export const emailSchema = z
   .string()
   .min(1, "Email obbligatoria")
-  .email("Formato email non valido")
   .max(255, "Email troppo lunga")
+  .pipe(z.email("Formato email non valido"))
   .transform((v) => v.toLowerCase().trim());
 
 /**
@@ -30,10 +36,7 @@ export const strongPasswordSchema = z
   .string()
   .min(12, "La password deve avere almeno 12 caratteri")
   .max(128, "Password troppo lunga")
-  .refine(
-    (s) => Buffer.byteLength(s, "utf8") <= 72,
-    "La password supera i 72 byte (limite bcrypt)"
-  )
+  .refine((s) => Buffer.byteLength(s, "utf8") <= 72, "La password supera i 72 byte (limite bcrypt)")
   .regex(/[A-Z]/, "Deve contenere almeno una lettera maiuscola")
   .regex(/[a-z]/, "Deve contenere almeno una lettera minuscola")
   .regex(/[0-9]/, "Deve contenere almeno una cifra")
@@ -42,31 +45,78 @@ export const strongPasswordSchema = z
   // il massimo permesso sono 2 caratteri consecutivi uguali.
   .refine((pwd) => !/(.)\1\1/.test(pwd), "Non più di 2 caratteri consecutivi uguali");
 
-export const ruoloSchema = z.enum([
-  "volontario",
-  "referente_provinciale",
-  "referente_regionale",
-  "admin",
-]);
+export const ruoloSchema = z.enum(["volontario", "referente_provinciale", "referente_regionale", "admin"]);
 
 /**
- * Schema per la creazione di un utente, con validazione incrociata
- * ruolo/territorio: referente_provinciale richiede provinciaId,
- * referente_regionale richiede regioneId. Volontario e admin non
- * devono avere territorio assegnato (verrà ignorato, ma è meglio
- * rifiutarlo esplicitamente per evitare configurazioni fuorvianti).
+ * Vincoli di coerenza ruolo/territorio, condivisi tra la creazione utente
+ * (nuovoUtenteSchema) e la modifica utente (PATCH /api/config/users/[id]).
+ * referente_provinciale richiede provinciaId, referente_regionale richiede
+ * regioneId. Volontario e admin non devono avere territorio assegnato.
+ */
+export function applicaVincoliRuoloTerritorio(
+  stato: {
+    ruolo: z.infer<typeof ruoloSchema>;
+    provinciaId?: number | null;
+    regioneId?: number | null;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (stato.ruolo === "referente_provinciale" && stato.provinciaId == null) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Il ruolo referente_provinciale richiede provinciaId assegnato",
+      path: ["provinciaId"],
+    });
+  }
+  if (stato.ruolo === "referente_regionale" && stato.regioneId == null) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Il ruolo referente_regionale richiede regioneId assegnato",
+      path: ["regioneId"],
+    });
+  }
+  if (
+    (stato.ruolo === "volontario" || stato.ruolo === "admin") &&
+    (stato.provinciaId != null || stato.regioneId != null)
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      message: "I ruoli volontario e admin non devono avere territorio assegnato",
+      path: ["ruolo"],
+    });
+  }
+}
+
+/**
+ * Coerenza ruolo/territorio sullo stato effettivo di un utente (dopo la
+ * modifica). Usato da PATCH /api/config/users/[id].
+ */
+export const vincoliRuoloTerritorioSchema = z
+  .object({
+    ruolo: ruoloSchema,
+    provinciaId: idDbSchema.nullable().optional(),
+    regioneId: idDbSchema.nullable().optional(),
+  })
+  .superRefine(applicaVincoliRuoloTerritorio);
+
+/**
+ * Schema per la creazione di un utente.
  */
 export const nuovoUtenteSchema = z
   .object({
     email: emailSchema,
-    nomeCognome: z.string().min(1, "Nome e cognome obbligatori").max(200).regex(/^[^\r\n]*$/, "Il nome non può contenere a capo"),
+    nomeCognome: z
+      .string()
+      .min(1, "Nome e cognome obbligatori")
+      .max(200)
+      .regex(/^[^\r\n]*$/, "Il nome non può contenere a capo"),
     password: strongPasswordSchema,
     ruolo: ruoloSchema.default("volontario"),
-    provinciaId: z.number().int().min(1).optional().nullable(),
-    regioneId: z.number().int().min(1).optional().nullable(),
+    provinciaId: idDbSchema.optional().nullable(),
+    regioneId: idDbSchema.optional().nullable(),
     indirizzo: z.string().max(500).optional().nullable(),
-    pec: z.string().email("PEC non valida").optional().nullable().or(z.literal("")),
-    emailOrdinaria: z.string().email("Email ordinaria non valida").optional().nullable().or(z.literal("")),
+    pec: z.email("PEC non valida").optional().nullable().or(z.literal("")),
+    emailOrdinaria: z.email("Email ordinaria non valida").optional().nullable().or(z.literal("")),
     firma: z.string().max(2000).optional().nullable(),
     inizialiProtocollo: z
       .string()
@@ -77,36 +127,19 @@ export const nuovoUtenteSchema = z
       .nullable(),
     attivo: z.boolean().default(true),
   })
-  .superRefine((data, ctx) => {
-    if (data.ruolo === "referente_provinciale" && data.provinciaId == null) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Il ruolo referente_provinciale richiede provinciaId assegnato",
-        path: ["provinciaId"],
-      });
-    }
-    if (data.ruolo === "referente_regionale" && data.regioneId == null) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Il ruolo referente_regionale richiede regioneId assegnato",
-        path: ["regioneId"],
-      });
-    }
-    if (
-      (data.ruolo === "volontario" || data.ruolo === "admin") &&
-      (data.provinciaId != null || data.regioneId != null)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "I ruoli volontario e admin non devono avere territorio assegnato",
-        path: ["ruolo"],
-      });
-    }
-  });
+  .superRefine((data, ctx) => applicaVincoliRuoloTerritorio(data, ctx));
 
 export const nuovaRegioneSchema = z.object({
-  regione: z.string().min(1, "Regione obbligatoria").max(100).regex(/^[^\r\n]*$/, "Il nome regione non può contenere a capo"),
-  riferimentoLegge: z.string().min(1, "Riferimento legge obbligatorio").max(500).regex(/^[^\r\n]*$/, "Il riferimento legge non può contenere a capo"),
+  regione: z
+    .string()
+    .min(1, "Regione obbligatoria")
+    .max(100)
+    .regex(/^[^\r\n]*$/, "Il nome regione non può contenere a capo"),
+  riferimentoLegge: z
+    .string()
+    .min(1, "Riferimento legge obbligatorio")
+    .max(500)
+    .regex(/^[^\r\n]*$/, "Il riferimento legge non può contenere a capo"),
   titoloLegge: z.string().max(2000).default(""),
   testoProgettoIlluminotecnico: z.string().max(500).default(""),
   testoDeroghe: z.string().max(500).default(""),
@@ -115,7 +148,7 @@ export const nuovaRegioneSchema = z.object({
   testoInstallazione: z.string().max(500).default(""),
   testoControllo: z.string().max(500).default(""),
   testoSanzioni: z.string().max(500).default(""),
-  pecArpaRegionale: z.string().email("PEC ARPA non valida").or(z.literal("")),
+  pecArpaRegionale: z.email("PEC ARPA non valida").or(z.literal("")).default(""),
 });
 
 export const nuovaProvinciaSchema = z.object({
@@ -124,27 +157,54 @@ export const nuovaProvinciaSchema = z.object({
     .min(2, "Sigla deve avere 2 caratteri")
     .max(2, "Sigla deve avere 2 caratteri")
     .regex(/^[A-Za-z]+$/, "Solo lettere ammesse"),
-  nome: z.string().min(1, "Nome obbligatorio").max(100).regex(/^[^\r\n]*$/, "Il nome non può contenere a capo"),
-  regioneId: z.number().int().min(1, "Regione obbligatoria"),
-  pecArpaProvinciale: z
+  nome: z
     .string()
-    .email("PEC ARPA provinciale non valida")
-    .optional()
-    .nullable()
-    .or(z.literal("")),
+    .min(1, "Nome obbligatorio")
+    .max(100)
+    .regex(/^[^\r\n]*$/, "Il nome non può contenere a capo"),
+  regioneId: z
+    .number({ error: "regioneId non valido" })
+    .int()
+    .min(1, "Regione obbligatoria")
+    .max(MAX_ID_DB, "regioneId fuori intervallo"),
+  pecArpaProvinciale: z.email("PEC ARPA provinciale non valida").optional().nullable().or(z.literal("")),
 });
 
+/**
+ * Schema per la validazione del CAP italiano (5 cifre).
+ * Condiviso tra la validazione dei comuni (admin) e la validazione
+ * del CAP fornito dal volontario nel form segnalazione.
+ */
+export const capSchema = z
+  .string()
+  .length(5, "Il CAP italiano deve avere esattamente 5 cifre")
+  .regex(/^[0-9]{5}$/, "CAP deve contenere solo cifre");
+
 export const nuovoComuneSchema = z.object({
-  nome: z.string().min(1, "Nome obbligatorio").max(200).regex(/^[^\r\n]*$/, "Il nome non può contenere a capo"),
-  provinciaId: z.number().int().min(1, "Provincia obbligatoria"),
-  // CAP italiano: esattamente 5 cifre
-  cap: z
+  nome: z
     .string()
-    .length(5, "Il CAP italiano deve avere esattamente 5 cifre")
-    .regex(/^[0-9]{5}$/, "CAP deve contenere solo cifre"),
-  pecComune: z.string().email("PEC Comune non valida"),
-  nomeSindaco: z.string().max(200).regex(/^[^\r\n]*$/, "Il nome del sindaco non può contenere a capo").optional().nullable(),
-  noteAggiornamento: z.string().max(500).regex(/^[^\r\n]*$/, "La nota non può contenere a capo").optional().nullable(),
+    .min(1, "Nome obbligatorio")
+    .max(200)
+    .regex(/^[^\r\n]*$/, "Il nome non può contenere a capo"),
+  provinciaId: z
+    .number({ error: "provinciaId non valido" })
+    .int()
+    .min(1, "Provincia obbligatoria")
+    .max(MAX_ID_DB, "provinciaId fuori intervallo"),
+  cap: capSchema,
+  pecComune: z.email("PEC Comune non valida"),
+  nomeSindaco: z
+    .string()
+    .max(200)
+    .regex(/^[^\r\n]*$/, "Il nome del sindaco non può contenere a capo")
+    .optional()
+    .nullable(),
+  noteAggiornamento: z
+    .string()
+    .max(500)
+    .regex(/^[^\r\n]*$/, "La nota non può contenere a capo")
+    .optional()
+    .nullable(),
 });
 
 /**
@@ -163,11 +223,7 @@ export const segnalazionePecSchema = z.object({
     .max(2000, "Testo introduttivo troppo lungo (max 2000 caratteri)")
     .optional()
     .nullable(),
-  pecCcAggiuntive: z
-    .string()
-    .max(500, "PEC CC troppo lunga")
-    .optional()
-    .nullable(),
+  pecCcAggiuntive: z.string().max(500, "PEC CC troppo lunga").optional().nullable(),
   destinatarioNome: z
     .string()
     .max(200)
@@ -177,14 +233,22 @@ export const segnalazionePecSchema = z.object({
 });
 
 /**
- * Schema per la validazione del CAP italiano (5 cifre).
- * Condiviso tra la validazione dei comuni (admin) e la validazione
- * del CAP fornito dal volontario nel form segnalazione.
+ * I flag delle segnalazioni devono essere booleani JSON. In particolare,
+ * la stringa "false" non deve attivare per errore l'invio a ARPA né una
+ * contestazione nella lettera. Per mittenteVisibile si accetta anche la
+ * stringa "false" per compatibilità con i client che già la inviavano.
  */
-export const capSchema = z
-  .string()
-  .length(5, "Il CAP italiano deve avere esattamente 5 cifre")
-  .regex(/^[0-9]{5}$/, "CAP deve contenere solo cifre");
+export const segnalazioneFlagSchema = z.object({
+  chkVetroPianoInclinato: z.boolean().optional(),
+  chkVetroCurvo: z.boolean().optional(),
+  chkAltroTipologia: z.boolean().optional(),
+  chkLuceVersoAlto: z.boolean().optional(),
+  chkAbbagliamento: z.boolean().optional(),
+  chkLuceIntrusiva: z.boolean().optional(),
+  chkAltroProblema: z.boolean().optional(),
+  includiArpa: z.boolean().optional(),
+  mittenteVisibile: z.union([z.boolean(), z.literal("false")]).optional(),
+});
 
 /**
  * Valida una lista di indirizzi PEC in copia (separati da ;).
@@ -196,15 +260,13 @@ export const capSchema = z
  * - deduplicazione case-insensitive (lo stesso indirizzo ripetuto
  *   non genera email multiple)
  */
-export function validaPecCcAggiuntive(
-  input: string | null | undefined
-): { ok: true; emails: string[] } | { ok: false; error: string } {
-  if (!input || !input.trim()) return { ok: true, emails: [] };
+export function validaPecCcAggiuntive(input: unknown): { ok: true; emails: string[] } | { ok: false; error: string } {
+  if (typeof input !== "string" || !input.trim()) return { ok: true, emails: [] };
   const parts = input
     .split(";")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
-  const localEmailSchema = z.string().email();
+  const localEmailSchema = z.email();
   const seen = new Set<string>();
   const emails: string[] = [];
   // Validazione e deduplicazione in un singolo passaggio: il conteggio
@@ -235,11 +297,9 @@ export function validaPecCcAggiuntive(
  * usare `schema.safeParse` direttamente per ottenere tutti gli issue.
  */
 export function validate<T>(
-  schema: z.ZodSchema<T>,
-  input: unknown
-):
-  | { success: true; data: T }
-  | { success: false; error: string } {
+  schema: z.ZodType<T>,
+  input: unknown,
+): { success: true; data: T } | { success: false; error: string } {
   const result = schema.safeParse(input);
   if (result.success) {
     return { success: true, data: result.data };

@@ -12,10 +12,9 @@ coverage
 *.tsbuildinfo
 
 # Storage e backups (PII e dati sensibili)
-# storage/ contiene uploads/ e il .gitkeep che mantiente la directory in
-# git. Escludiamo il contenuto di uploads/ dal build context (i file
-# caricati sono runtime, non build-time) ma manteniamo storage/.gitkeep
-# per preservare la struttura delle directory.
+# I file caricati in storage/uploads/ sono dati di runtime e non entrano nel
+# build context. Le directory storage/uploads e /backups vengono create dal
+# Dockerfile, quindi anche storage/.gitkeep resta escluso.
 storage/uploads/*
 storage/.gitkeep
 backups
@@ -54,7 +53,7 @@ LICENSE
 **/__tests__
 **/*.test.ts
 **/*.test.tsx
-vitest.config.ts
+vitest.config.mts
 setup-tests.ts
 
 # Editor config non necessaria al runtime

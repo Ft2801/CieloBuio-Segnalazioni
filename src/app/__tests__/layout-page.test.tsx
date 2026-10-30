@@ -1,14 +1,27 @@
 /**
- * Test per layout.tsx, page.tsx, toaster.tsx.
- * Copre: rendering root layout, metadata, viewport, pagina home, toaster.
+ * Test per layout.tsx e page.tsx.
+ * Copre: rendering del root layout, nonce CSP, tema iniziale, metadata, viewport e pagina home.
+ * Il Toaster è sostituito da un mock: il suo comportamento è testato in components/ui.
  */
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import React from "react";
+
+// next/font/local è trasformato dal compilatore di Next: fuori dalla build espone solo la variabile CSS.
+vi.mock("next/font/local", () => ({
+  default: () => ({ variable: "--font-inter", className: "" }),
+}));
 
 // Mock del service worker registration (non disponibile in jsdom)
 vi.mock("@/components/ui/toaster", () => ({
   Toaster: () => <div data-testid="toaster-mock" />,
+}));
+
+// Nonce CSP letto dagli header di richiesta (impostato dal proxy in produzione).
+const mockNonce = vi.hoisted(() => ({ valore: null as string | null }));
+vi.mock("next/headers", () => ({
+  headers: async () => new Headers(mockNonce.valore ? { "x-nonce": mockNonce.valore } : {}),
 }));
 
 // Mock di use-session per evitare che AppShell faccia fetch reali
@@ -17,48 +30,96 @@ vi.mock("@/components/app/use-session", () => ({
 }));
 
 import RootLayout, { metadata, viewport } from "@/app/layout";
+import { SCRIPT_TEMA_INIZIALE } from "@/lib/tema";
 import Home from "@/app/page";
 
+// RootLayout rende <html> e <body>: va verificato sull'HTML prodotto dal server
+// renderer, senza montarlo dentro un container DOM (che produrrebbe errori di
+// annidamento e di script in React).
+async function renderLayout(children: React.ReactNode): Promise<string> {
+  const layout = await RootLayout({ children });
+  return renderToStaticMarkup(layout);
+}
+
+describe("RootLayout - font", () => {
+  it("applica la variabile del font Inter alla radice del documento", async () => {
+    const html = await renderLayout(<p>x</p>);
+    expect(html).toContain("--font-inter");
+    expect(html).toContain('<html lang="it" class="--font-inter"');
+  });
+});
+
+describe("RootLayout - nonce CSP", () => {
+  it("applica il nonce della richiesta allo script del service worker", async () => {
+    mockNonce.valore = "nonce-di-test";
+    try {
+      const html = await renderLayout(<p>x</p>);
+      expect(html).toContain('nonce="nonce-di-test"');
+    } finally {
+      mockNonce.valore = null;
+    }
+  });
+
+  it("senza nonce (sviluppo) lo script del service worker non ha l'attributo", async () => {
+    mockNonce.valore = null;
+    const html = await renderLayout(<p>x</p>);
+    expect(html).toContain("/sw-register.js");
+    expect(html).not.toContain("nonce=");
+  });
+
+  it("nella build statica (CIELOBUIO_BUILD_STATICO=1) non legge gli header e non applica il nonce", async () => {
+    vi.stubEnv("CIELOBUIO_BUILD_STATICO", "1");
+    mockNonce.valore = "nonce-ignorato";
+    try {
+      const html = await renderLayout(<p>x</p>);
+      expect(html).toContain("/sw-register.js");
+      expect(html).not.toContain("nonce=");
+    } finally {
+      mockNonce.valore = null;
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("RootLayout - tema iniziale", () => {
+  it("inserisce lo script del tema inline nel head, prima del body, con il nonce della richiesta", async () => {
+    mockNonce.valore = "nonce-tema";
+    try {
+      const html = await renderLayout(<p>x</p>);
+      const headBlock = html.match(/<head>([\s\S]*?)<\/head>/)?.[1] ?? "";
+      expect(headBlock).toContain(SCRIPT_TEMA_INIZIALE);
+      expect(headBlock).toContain('nonce="nonce-tema"');
+      expect(html.indexOf("cielobuio-tema")).toBeLessThan(html.indexOf("<body"));
+    } finally {
+      mockNonce.valore = null;
+    }
+  });
+});
+
 describe("RootLayout", () => {
-  it("renderizza children con lang=it", () => {
-    render(
-      <RootLayout>
-        <div data-testid="child">Content</div>
-      </RootLayout>
-    );
-    expect(screen.getByTestId("child")).toBeInTheDocument();
-    expect(document.documentElement.lang).toBe("it");
+  it("renderizza children con lang=it", async () => {
+    const html = await renderLayout(<div data-testid="child">Content</div>);
+    expect(html).toContain('lang="it"');
+    expect(html).toContain('data-testid="child"');
   });
 
-  it("include il Toaster", () => {
-    render(
-      <RootLayout>
-        <div>Test</div>
-      </RootLayout>
-    );
-    expect(screen.getByTestId("toaster-mock")).toBeInTheDocument();
+  it("include il Toaster", async () => {
+    const html = await renderLayout(<div>Test</div>);
+    expect(html).toContain('data-testid="toaster-mock"');
   });
 
-  it("include lo script di service worker registration", () => {
-    const { container } = render(
-      <RootLayout>
-        <div>Test</div>
-      </RootLayout>
-    );
-    const script = container.querySelector("script[src='/sw-register.js']");
-    expect(script).toBeInTheDocument();
-    expect(script?.getAttribute("defer")).toBe("");
+  it("include lo script di service worker registration", async () => {
+    const html = await renderLayout(<div>Test</div>);
+    const tag = html.match(/<script[^>]*sw-register\.js[^>]*>/)?.[0] ?? "";
+    expect(tag).not.toBe("");
+    expect(tag).toContain("defer");
   });
 
-  it("ha body con classi antialiased e bg-background", () => {
-    render(
-      <RootLayout>
-        <div>Test</div>
-      </RootLayout>
-    );
-    const body = document.body;
-    expect(body.className).toContain("antialiased");
-    expect(body.className).toContain("bg-background");
+  it("ha body con classi antialiased e bg-background", async () => {
+    const html = await renderLayout(<div>Test</div>);
+    const body = html.match(/<body[^>]*class="([^"]*)"/)?.[1] ?? "";
+    expect(body).toContain("antialiased");
+    expect(body).toContain("bg-background");
   });
 });
 
@@ -73,7 +134,7 @@ describe("metadata export", () => {
   });
 
   it("ha il manifest PWA", () => {
-    expect(metadata.manifest).toBe("/manifest.json");
+    expect(metadata.manifest).toBe("./manifest.json");
   });
 
   it("ha le keywords", () => {
@@ -86,15 +147,6 @@ describe("metadata export", () => {
     const authors = metadata.authors as unknown as Array<{ name: string; url: string }>;
     expect(authors?.[0]?.name).toBe("Fabio Tempera");
     expect(authors?.[0]?.url).toBe("https://ft2801.github.io/Portfolio");
-  });
-
-  it("ha le icone PWA", () => {
-    // icons.icon può essere string | array; castiamo per testare
-    const icons = metadata.icons as unknown as {
-      icon?: Array<{ url: string; sizes: string; type: string }>;
-    };
-    expect(icons.icon?.[0]?.url).toBe("/icon-192.png");
-    expect(icons.icon?.[1]?.url).toBe("/icon-512.png");
   });
 
   it("ha appleWebApp configurato", () => {

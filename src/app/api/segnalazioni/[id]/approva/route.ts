@@ -11,11 +11,16 @@ import { db } from "@/lib/db";
 import { getSessionUser, canReviewSegnalazioni, hasTerritorialCompetence } from "@/lib/auth";
 import { logger } from "@/lib/logger";
 
+import { versioneCorrisponde } from "@/lib/versione";
+
 type Params = { params: Promise<{ id: string }> };
 
-export async function POST(_req: NextRequest, { params }: Params) {
+export async function POST(req: NextRequest, { params }: Params) {
   const user = await getSessionUser();
-  if (!user || !canReviewSegnalazioni(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canReviewSegnalazioni(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
@@ -28,17 +33,18 @@ export async function POST(_req: NextRequest, { params }: Params) {
   // Verifica competenza territoriale con helper centralizzato (fail-closed).
   // Un referente senza territorio assegnato non può approvare segnalazioni.
   if (!hasTerritorialCompetence(user, segnalazione)) {
+    return NextResponse.json({ error: "Non autorizzato per questa segnalazione" }, { status: 403 });
+  }
+
+  if (!versioneCorrisponde(req.headers.get("if-match"), segnalazione.updatedAt)) {
     return NextResponse.json(
-      { error: "Non autorizzato per questa segnalazione" },
-      { status: 403 }
+      { error: "La segnalazione è cambiata. Ricarica e verifica i dati prima di procedere." },
+      { status: 409 },
     );
   }
 
   if (segnalazione.stato !== "in_revisione") {
-    return NextResponse.json(
-      { error: "La segnalazione non è in stato di revisione" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "La segnalazione non è in stato di revisione" }, { status: 400 });
   }
 
   try {
@@ -52,7 +58,15 @@ export async function POST(_req: NextRequest, { params }: Params) {
       // concorrentemente, ad es. un altro referente rifiuta nello stesso
       // istante). Se count=0, lo stato è cambiato: rispondiamo 409 Conflict.
       const result = await tx.segnalazione.updateMany({
-        where: { id, stato: "in_revisione" },
+        where: {
+          id,
+          stato: "in_revisione",
+          updatedAt: segnalazione.updatedAt,
+          volontarioId: segnalazione.volontarioId,
+          provinciaId: segnalazione.provinciaId,
+          regioneId: segnalazione.regioneId,
+          invioPecLockToken: null,
+        },
         data: {
           stato: "approvata",
           referenteApprovatoreId: user.id,
@@ -78,20 +92,17 @@ export async function POST(_req: NextRequest, { params }: Params) {
     });
     if (aggiornata === null) {
       return NextResponse.json(
-        { error: "La segnalazione non è più in stato di revisione (potrebbe essere stata modificata concorrentemente). Ricarica la pagina." },
-        { status: 409 }
+        {
+          error:
+            "La segnalazione non è più in stato di revisione (potrebbe essere stata modificata concorrentemente). Ricarica la pagina.",
+        },
+        { status: 409 },
       );
     }
 
-    return NextResponse.json(
-      { segnalazione: aggiornata },
-      { headers: { "Cache-Control": "private, no-store" } }
-    );
+    return NextResponse.json({ segnalazione: aggiornata }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (e) {
     logger.error({ err: e }, "Errore approvazione");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }

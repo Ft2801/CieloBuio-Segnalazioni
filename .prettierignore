@@ -1,0 +1,13 @@
+# Dipendenze e output generati
+node_modules
+.next
+out
+coverage
+*.tsbuildinfo
+next-env.d.ts
+
+# Lockfile gestito da npm
+package-lock.json
+
+# Documentazione Markdown: formattata a mano (tabelle, elenchi e blocchi di codice)
+*.md

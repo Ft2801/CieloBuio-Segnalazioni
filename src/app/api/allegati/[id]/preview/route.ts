@@ -14,7 +14,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSessionUser, canViewSegnalazione } from "@/lib/auth";
-import { parseUrlStorageSicuro, risolviPathAllegatoSicuro } from "@/lib/path-guard";
+import { parseUrlStorageSicuro, risolviPathAllegatoSicuro, verificaPercorsoFisicoAllegato } from "@/lib/path-guard";
 import { readFile, stat } from "fs/promises";
 
 type Params = { params: Promise<{ id: string }> };
@@ -46,7 +46,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
-  // L4: path traversal protection centralizzata in path-guard.ts.
+  // La protezione da path traversal è centralizzata in path-guard.ts.
   const parsed = parseUrlStorageSicuro(allegato.urlStorage);
   if (!parsed) {
     return NextResponse.json({ error: "Path non valido" }, { status: 400 });
@@ -54,11 +54,15 @@ export async function GET(_req: NextRequest, { params }: Params) {
   if (parsed.segnalazioneId !== allegato.segnalazioneId) {
     return NextResponse.json({ error: "Path non valido" }, { status: 400 });
   }
-  // parsed è già validato da parseUrlStorageSicuro (segmenti sicuri),
-  // quindi risolviPathAllegatoSicuro restituisce sempre un path non null.
-  const filePath = risolviPathAllegatoSicuro(parsed.segnalazioneId, parsed.filename) as string;
+  // risolviPathAllegatoSicuro restituisce null solo per segmenti non sicuri:
+  // il controllo è una difesa in profondità e non un caso ordinario.
+  const filePath = risolviPathAllegatoSicuro(parsed.segnalazioneId, parsed.filename);
+  if (!filePath) {
+    return NextResponse.json({ error: "Path non valido" }, { status: 400 });
+  }
 
   try {
+    await verificaPercorsoFisicoAllegato(filePath);
     const s = await stat(filePath);
     if (!s.isFile()) {
       return NextResponse.json({ error: "File non trovato" }, { status: 404 });

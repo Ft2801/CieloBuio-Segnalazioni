@@ -8,10 +8,9 @@
  *  1. **Token statico** (raccomandato per Prometheus): se la variabile
  *     d'ambiente `METRICS_TOKEN` è impostata, l'endpoint accetta
  *     richieste con header `Authorization: Bearer <token>`.
- *     L'autenticazione via query param `?token=` è stata rimossa
- *     perché i parametri URL vengono registrati nei log dei reverse
- *     proxy (Caddy, nginx) e nella cronologia del browser, esponendo
- *     il token a chi ha accesso ai log. Se serve una modalità
+ *     Il token non viene accettato come query param `?token=`: i parametri
+ *     URL finiscono nei log dei reverse proxy (Caddy, nginx) e nella
+ *     cronologia del browser, esponendo il token a chi ha accesso ai log. Se serve una modalità
  *     machine-to-machine senza header, configurare il reverse proxy
  *     per iniettare l'header Authorization dal proprio segreto.
  *
@@ -44,26 +43,28 @@ export async function GET(req: NextRequest) {
 
   if (metricsToken) {
     // Modalità 1: token statico (per Prometheus) via Bearer header.
-    // NON accettiamo ?token= nell'URL: i parametri URL vengono loggati
-    // dai reverse proxy e restano nella cronologia del browser, quindi
-    // espongono il token a chiunque legga i log.
+    // Il token non viene accettato nell'URL (?token=): i parametri URL
+    // vengono loggati dai reverse proxy e restano nella cronologia del
+    // browser, quindi espongono il token a chiunque legga i log.
     const authHeader = req.headers.get("authorization") ?? "";
-    const bearerToken = authHeader.startsWith("Bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
 
-    // Usa l'helper centralizzato timingSafeEqualStrings da auth.ts:
-    // implementazione più robusta (hash-based, no leak su lunghezza).
+    // Confronto a tempo costante tramite l'helper timingSafeEqualStrings di
+    // auth.ts (basato su hash, senza leak sulla lunghezza del token).
+    // Credenziali assenti o errate: 401 con challenge Bearer (RFC 6750).
     if (!bearerToken || !timingSafeEqualStrings(bearerToken, metricsToken)) {
       return NextResponse.json(
-        { error: "Non autorizzato" },
-        { status: 403 }
+        { error: "Non autenticato" },
+        { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="metrics"' } },
       );
     }
   } else {
     // Modalità 2: cookie di sessione admin (per ispezione browser).
     const user = await getSessionUser();
-    if (!user || !canManageConfiguration(user)) {
+    if (!user) {
+      return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+    }
+    if (!canManageConfiguration(user)) {
       return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
     }
   }

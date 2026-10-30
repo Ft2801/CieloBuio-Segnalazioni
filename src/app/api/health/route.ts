@@ -8,17 +8,20 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import pkg from "../../../../package.json";
+
+// La versione è letta da package.json: un unico punto di verità.
+const SERVICE_VERSION = pkg.version;
 
 export async function GET() {
   const start = Date.now();
   let dbConnected = false;
 
   try {
-    // SELECT 1 instead of count(): più leggera e non dipende dalla
-    // presenza di tabelle popolate. count() su tabella user esegue una
-    // scansione completa (o index scan) ad ogni health check, mentre
-    // SELECT 1 verifica solo la connettività. Prisma.raw è parameterizzato
-    // e non espone a SQL injection (nessuna interpolazione di input utente).
+    // SELECT 1 invece di count(): è più leggera e non dipende dalle tabelle
+    // popolate. count() su una tabella eseguirebbe una scansione ad ogni
+    // health check, mentre SELECT 1 verifica solo la connettività. Il template
+    // tagged di $queryRaw è parametrizzato e non interpola input utente.
     await db.$queryRaw`SELECT 1`;
     dbConnected = true;
   } catch {
@@ -32,11 +35,9 @@ export async function GET() {
       status: "ok" as const,
       timestamp: new Date().toISOString(),
       service: "cielobuio-segnalazioni",
-      version: "1.0.0",
+      version: SERVICE_VERSION,
       database: "connected" as const,
       latencyMs,
-      uptime: process.uptime(),
-      environment: process.env.NODE_ENV ?? "development",
     };
     logger.info({ latencyMs, status: "ok" }, "Health check passed");
     return NextResponse.json(health, { status: 200 });
@@ -48,11 +49,11 @@ export async function GET() {
       status: "error" as const,
       timestamp: new Date().toISOString(),
       service: "cielobuio-segnalazioni",
-      version: "1.0.0",
+      version: SERVICE_VERSION,
       database: "disconnected" as const,
       latencyMs,
       error: "Database connection failed",
     },
-    { status: 503 }
+    { status: 503 },
   );
 }

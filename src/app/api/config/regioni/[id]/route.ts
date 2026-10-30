@@ -14,22 +14,30 @@ import { Prisma } from "@prisma/client";
 import { getSessionUser, canManageConfiguration } from "@/lib/auth";
 import { nuovaRegioneSchema, validate } from "@/lib/validation";
 import { logger } from "@/lib/logger";
+import { leggiBodyOggetto, parseIdIntero } from "@/lib/http";
+import { messaggioDaErrore } from "@/lib/errori";
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function PUT(req: NextRequest, { params }: Params) {
   const user = await getSessionUser();
-  if (!user || !canManageConfiguration(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canManageConfiguration(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
   const { id } = await params;
-  const regioneId = Number(id);
-  if (isNaN(regioneId)) {
+  const regioneId = parseIdIntero(id);
+  if (regioneId === null) {
     return NextResponse.json({ error: "ID non valido" }, { status: 400 });
   }
 
-  const body = await req.json().catch(() => ({}));
+  const body = await leggiBodyOggetto(req);
+  if (!body) {
+    return NextResponse.json({ error: "Corpo della richiesta non valido" }, { status: 400 });
+  }
   const validation = validate(nuovaRegioneSchema, body);
   if (!validation.success) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
@@ -60,23 +68,26 @@ export async function PUT(req: NextRequest, { params }: Params) {
     });
     return NextResponse.json({ regione: aggiornata });
   } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return NextResponse.json({ error: "Esiste già una regione con questo nome" }, { status: 400 });
+    }
     logger.error({ err: e }, "Errore modifica regione");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
   const user = await getSessionUser();
-  if (!user || !canManageConfiguration(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canManageConfiguration(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
   const { id } = await params;
-  const regioneId = Number(id);
-  if (isNaN(regioneId)) {
+  const regioneId = parseIdIntero(id);
+  if (regioneId === null) {
     return NextResponse.json({ error: "ID non valido" }, { status: 400 });
   }
 
@@ -91,14 +102,18 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
 
     if (existing._count.province > 0) {
       return NextResponse.json(
-        { error: `Impossibile eliminare: la regione ha ${existing._count.province} provincia/e collegate. Eliminare prima le province.` },
-        { status: 400 }
+        {
+          error: `Impossibile eliminare: la regione ha ${existing._count.province} provincia/e collegate. Eliminare prima le province.`,
+        },
+        { status: 400 },
       );
     }
     if (existing._count.segnalazioni > 0) {
       return NextResponse.json(
-        { error: `Impossibile eliminare: la regione ha ${existing._count.segnalazioni} segnalazione/i collegate. Le segnalazioni mantengono il riferimento per tracciabilità storica.` },
-        { status: 400 }
+        {
+          error: `Impossibile eliminare: la regione ha ${existing._count.segnalazioni} segnalazione/i collegate. Le segnalazioni mantengono il riferimento per tracciabilità storica.`,
+        },
+        { status: 400 },
       );
     }
 
@@ -108,8 +123,10 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
     });
     if (referentiCount > 0) {
       return NextResponse.json(
-        { error: `Impossibile eliminare: la regione ha ${referentiCount} referente/i regionale/i assegnato/i. Riassegna o disattiva prima i referenti.` },
-        { status: 400 }
+        {
+          error: `Impossibile eliminare: la regione ha ${referentiCount} referente/i regionale/i assegnato/i. Riassegna o disattiva prima i referenti.`,
+        },
+        { status: 400 },
       );
     }
 
@@ -119,8 +136,8 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
     // count-check iniziale e la delete, causando una FK violation (P2003).
     try {
       await db.$transaction(async (tx) => {
-        // Re-count dentro la transazione con lock esplicito sul record
-        // regione (SELECT FOR UPDATE) per serializzare l'accesso.
+        // Ri-verifica delle dipendenze dentro la transazione: un record
+        // dipendente creato nel frattempo viene rilevato qui.
         const provinceCount = await tx.provincia.count({ where: { regioneId } });
         if (provinceCount > 0) {
           throw new Error(`PROVINCE_COLLEGATE:${provinceCount}`);
@@ -139,47 +156,48 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
       });
       return NextResponse.json({ ok: true });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = messaggioDaErrore(e);
       if (msg.startsWith("PROVINCE_COLLEGATE:")) {
         const n = msg.split(":")[1];
         return NextResponse.json(
           { error: `Impossibile eliminare: la regione ha ${n} provincia/e collegate. Eliminare prima le province.` },
-          { status: 400 }
+          { status: 400 },
         );
       }
       if (msg.startsWith("SEGNALAZIONI_COLLEGATE:")) {
         const n = msg.split(":")[1];
         return NextResponse.json(
-          { error: `Impossibile eliminare: la regione ha ${n} segnalazione/i collegate. Le segnalazioni mantengono il riferimento per tracciabilità storica.` },
-          { status: 400 }
+          {
+            error: `Impossibile eliminare: la regione ha ${n} segnalazione/i collegate. Le segnalazioni mantengono il riferimento per tracciabilità storica.`,
+          },
+          { status: 400 },
         );
       }
       if (msg.startsWith("REFERENTI_ASSEGNATI:")) {
         const n = msg.split(":")[1];
         return NextResponse.json(
-          { error: `Impossibile eliminare: la regione ha ${n} referente/i regionale/i assegnato/i. Riassegna o disattiva prima i referenti.` },
-          { status: 400 }
+          {
+            error: `Impossibile eliminare: la regione ha ${n} referente/i regionale/i assegnato/i. Riassegna o disattiva prima i referenti.`,
+          },
+          { status: 400 },
         );
       }
       // P2003 (FK violation) residua: la race ha comunque creato un record
       // dipendente tra l'ultimo count-check e la delete. Risposta 409.
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
         return NextResponse.json(
-          { error: "Impossibile eliminare: una nuova dipendenza è stata creata concorrentemente. Ricarica la pagina e riprova." },
-          { status: 409 }
+          {
+            error:
+              "Impossibile eliminare: una nuova dipendenza è stata creata concorrentemente. Ricarica la pagina e riprova.",
+          },
+          { status: 409 },
         );
       }
       logger.error({ err: e }, "Errore eliminazione regione");
-      return NextResponse.json(
-        { error: "Errore interno del server" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
     }
   } catch (e) {
     logger.error({ err: e }, "Errore eliminazione regione");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }

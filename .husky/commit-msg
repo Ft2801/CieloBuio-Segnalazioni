@@ -1,0 +1,10 @@
+# Convenzioni per i commit (CONTRIBUTING.md): titolo non vuoto e non più lungo di 72 caratteri.
+title=$(head -n 1 "$1")
+if [ -z "$title" ]; then
+  echo "Il messaggio di commit è vuoto." >&2
+  exit 1
+fi
+if [ "$(printf '%s' "$title" | wc -m)" -gt 72 ]; then
+  echo "Il titolo del commit supera 72 caratteri." >&2
+  exit 1
+fi

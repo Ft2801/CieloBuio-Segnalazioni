@@ -2,31 +2,30 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  // Non inviare l'header X-Powered-By per non fingerprintare lo stack
-  // tecnologico lato client (riduce la superficie di attacco).
+  // Nessun header X-Powered-By: non espone lo stack tecnologico al client.
   poweredByHeader: false,
-  // Non ignorare gli errori TypeScript in build; aiuta a intercettare
-  // vulnerabilità di sicurezza legate a tipi sballati (es. string | undefined che
-  // bypassa controlli strict).
+  // Il type check del build è eseguito dallo script "build" con TypeScript 7
+  // (npm run typecheck), che precede next build. Il type check interno di Next
+  // userebbe il pacchetto "typescript" del progetto (TypeScript 6, richiesto da
+  // typescript-eslint): disattivato per evitare una seconda verifica divergente.
+  // Gli errori di tipo bloccano comunque il build.
   typescript: {
-    ignoreBuildErrors: false,
+    ignoreBuildErrors: true,
   },
-  // reactStrictMode per intercettare pattern deprecari in development
+  // reactStrictMode per intercettare pattern deprecati in development
   reactStrictMode: true,
-  // Limite dimensione body per le richieste: previene che upload
-  // arbitrarmente grandi (multi-GB) vengano bufferizzati in memoria prima
-  // del check su file.size nella route /api/upload. 12 MB copre il limite
-  // applicativo di 10 MB per singolo allegato con margine per il multipart
-  // encoding overhead. Per la route /api/upload viene poi applicato il
-  // check puntuale MAX_ALLEGATO_BYTE sul singolo file. Il limite effettivo
-  // è applicato anche dal reverse proxy (Caddy: request_body max_size 50MB)
-  // come defense-in-depth a monte dell'applicazione.
+  // Disabilita la generazione automatica di AGENTS.md in dev
+  agentRules: false,
+  // Il proxy di Next.js copia il corpo prima di chiamare la route. Il suo
+  // default di 10 MiB troncherebbe un file valido da 10 MiB più il multipart.
+  // Il limite di 12 MiB gli consente di inoltrare il body completo: la route
+  // /api/upload applica il limite effettivo di 10 MiB più 64 KiB misurando
+  // il flusso (413 anche se Content-Length manca o è falso). Caddy applica
+  // inoltre request_body max_size 12MB prima di raggiungere Next.js.
   experimental: {
-    serverActions: {
-      bodySizeLimit: "12mb",
-    },
+    proxyClientMaxBodySize: "12mb",
   },
-  // Header di sicurezza aggiuntivi a livello di Next.js (in aggiunta al middleware)
+  // Header di sicurezza aggiuntivi a livello di Next.js (in aggiunta al proxy)
   async headers() {
     return [
       {

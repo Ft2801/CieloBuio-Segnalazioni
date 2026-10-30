@@ -1,8 +1,9 @@
 /**
  * API: GET /api/segnalazioni/export
  *
- * Esporta le segnalazioni visibili all'utente in formato CSV, rispettando
- * il vincolo di portabilità dei dati (specifiche sezione 2, punto 4).
+ * Esporta le segnalazioni visibili all'utente in formato CSV, per la
+ * portabilità dei dati delle segnalazioni. Le date sono espresse nel fuso
+ * orario italiano (FUSO_ORARIO_UI).
  *
  * Parametri query:
  * - stato: filtra per stato (default: tutti)
@@ -10,8 +11,8 @@
  *
  * Rate limiting: massimo 5 export per utente per ora. L'export contiene
  * PII (email volontario, nome, indirizzi, coordinate GPS), per cui è
- * soggetto a limiti di throughput e a una entry di audit nello storico
- * delle segnalazioni (registro trattamenti GDPR art. 30).
+ * soggetto a limiti di throughput e a una voce nel registro AuditLog
+ * (registro trattamenti GDPR art. 30).
  *
  * Autore: Fabio Tempera (2026)
  */
@@ -21,27 +22,34 @@ import { db } from "@/lib/db";
 import { getSessionUser, getVisibilityFilter } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { labelStato } from "@/lib/types";
+import { logger } from "@/lib/logger";
+import { FUSO_ORARIO_UI } from "@/lib/format";
+
+// Legge una riga in più per distinguere un export completo da uno troncato.
+const MAX_RIGHE_EXPORT = 5000;
 
 function csvEscape(value: unknown): string {
   if (value === null || value === undefined) return "";
+  // Numeri e booleani sono valori certi: nessun prefisso, così i negativi restano numeri.
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
   let s = String(value);
-  // Sicurezza: CSV/Formula Injection. Se un campo inizia con `=`, `+`,
-  // `-`, `@`, `\t`, `\r`, Excel/LibreOffice lo interpreta come formula.
-  // Un volontario malevolo potrebbe inserire `=HYPERLINK(...)` o `=cmd|...`
-  // in un campo libero (nomeEsercizio, descrizioneLibera,
-  // notaAltroTipologia, notaAltroProblema, destinatarioNome) e colpire chi
-  // apre il CSV esportato. Prefissiamo con un apostrofo neutro: Excel lo
-  // mostra come testo letterale (l'apostrofo iniziale viene nascosto come
-  // convention di "force text").
-  if (/^[=+\-@\t\r]/.test(s)) {
+  // Sicurezza: CSV/Formula Injection. Se il testo inizia con uno spazio bianco
+  // oppure con `=`, `+`, `-` o `@`, Excel e LibreOffice possono interpretarlo come
+  // formula. Il prefisso apostrofo fa trattare il campo come testo.
+  if (/^[\s=+\-@]/.test(s)) {
     s = `'${s}`;
   }
-  // Se contiene virgola, virgolette, o a capo, racchiudi tra virgolette
+  // Se contiene separatore, virgolette o a capo, racchiudi tra virgolette
   // raddoppiando le virgolette interne.
-  if (/[",\n\r]/.test(s)) {
+  if (/[";\n\r]/.test(s)) {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;
+}
+
+/** Data nel formato italiano (gg/mm/aaaa) nel fuso di riferimento dell'app. */
+function formataData(data: Date | string): string {
+  return new Date(data).toLocaleDateString("it-IT", { timeZone: FUSO_ORARIO_UI });
 }
 
 export async function GET(req: NextRequest) {
@@ -58,7 +66,7 @@ export async function GET(req: NextRequest) {
     5, // maxAttempts
     60 * 60 * 1000, // windowMs = 1 ora
     60 * 60 * 1000, // blockResetMs = 1 ora
-    15 * 60 * 1000 // lockMs = 15 minuti (escalation)
+    15 * 60 * 1000, // lockMs = 15 minuti (escalation)
   );
   if (!exportRl.allowed) {
     const minuti = Math.ceil(exportRl.retryAfterSeconds / 60);
@@ -71,7 +79,7 @@ export async function GET(req: NextRequest) {
         headers: {
           "Retry-After": String(exportRl.retryAfterSeconds),
         },
-      }
+      },
     );
   }
 
@@ -82,8 +90,13 @@ export async function GET(req: NextRequest) {
   // Validazione del parametro stato contro whitelist (coerente con
   // /api/segnalazioni GET).
   const STATI_VALIDI = [
-    "bozza", "in_revisione", "approvata", "inviata",
-    "in_attesa", "chiusa_positiva", "chiusa_negativa",
+    "bozza",
+    "in_revisione",
+    "approvata",
+    "inviata",
+    "in_attesa",
+    "chiusa_positiva",
+    "chiusa_negativa",
   ];
 
   const where: Record<string, unknown> = { ...getVisibilityFilter(user) };
@@ -98,41 +111,55 @@ export async function GET(req: NextRequest) {
     ];
   }
 
-  const segnalazioni = await db.segnalazione.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    include: {
-      comune: true,
-      provincia: true,
-      regione: true,
-      volontario: { select: { id: true, nomeCognome: true, email: true } },
-      referenteApprovatore: { select: { id: true, nomeCognome: true } },
-      allegati: { select: { id: true } },
-    },
-    take: 5000,
-  });
-
-  // Audit trail: registra l'export nello storico di una segnalazione
-  // rappresentativa (la prima del result set, se presente) come voce
-  // di audit. Questo tracciamento risponde al requisito GDPR art. 30
-  // (registro delle attività di trattamento) per i download massivi.
-  if (segnalazioni.length > 0) {
-    try {
-      await db.storicoStato.create({
-        data: {
-          segnalazioneId: segnalazioni[0].id,
-          userId: user.id,
-          statoPrecedente: segnalazioni[0].stato,
-          statoNuovo: segnalazioni[0].stato,
-          nota: `Export CSV: ${segnalazioni.length} segnalazioni (filtri: stato=${stato ?? "tutti"}, search=${search ? "sì" : "no"})`,
-        },
-      });
-    } catch {
-      // L'audit trail è best-effort: non bloccare l'export se fallisce.
-    }
+  const segnalazioni = await db.segnalazione
+    .findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      include: {
+        comune: true,
+        provincia: true,
+        regione: true,
+        volontario: { select: { id: true, nomeCognome: true, email: true } },
+        referenteApprovatore: { select: { id: true, nomeCognome: true } },
+        allegati: { select: { id: true } },
+      },
+      take: MAX_RIGHE_EXPORT + 1,
+    })
+    .catch((err: unknown) => {
+      logger.error({ err, userId: user.id }, "[export] lettura segnalazioni fallita");
+      return null;
+    });
+  if (segnalazioni === null) {
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
+  }
+  if (segnalazioni.length > MAX_RIGHE_EXPORT) {
+    // Non presentare un CSV parziale come se fosse completo: chi lo usa per
+    // portabilità o verifica perderebbe silenziosamente le righe successive.
+    return NextResponse.json(
+      { error: `L'esportazione supera ${MAX_RIGHE_EXPORT} segnalazioni. Restringi la ricerca o filtra per stato.` },
+      { status: 422, headers: { "Cache-Control": "private, no-store" } },
+    );
   }
 
-  // Intestazioni CSV (UTF-8 con BOM per Excel)
+  // Audit trail dell'export (GDPR art. 30): evento dedicato, non legato a una
+  // singola segnalazione. Il fallimento non blocca il download, ma viene loggato.
+  try {
+    await db.auditLog.create({
+      data: {
+        userId: user.id,
+        azione: "export_csv",
+        dettagli: JSON.stringify({
+          righe: segnalazioni.length,
+          stato: stato ?? null,
+          ricerca: Boolean(search),
+        }),
+      },
+    });
+  } catch (err) {
+    logger.error({ err, userId: user.id }, "[export] registrazione audit dell'export fallita");
+  }
+
+  // Intestazioni CSV (UTF-8 con BOM e separatore ';' per Excel)
   const headers = [
     "Protocollo",
     "Data segnalazione",
@@ -172,7 +199,7 @@ export async function GET(req: NextRequest) {
   const rows = segnalazioni.map((s) =>
     [
       s.numeroProtocollo,
-      s.dataSegnalazione ? new Date(s.dataSegnalazione).toLocaleDateString("it-IT") : "",
+      s.dataSegnalazione ? formataData(s.dataSegnalazione) : "",
       labelStato(s.stato),
       s.volontario?.nomeCognome ?? "",
       s.volontario?.email ?? "",
@@ -200,18 +227,19 @@ export async function GET(req: NextRequest) {
       s.pecCcAggiuntive,
       s.oggettoPec,
       s.mittenteVisibile ? "Volontario" : "Referente",
-      s.dataInvio ? new Date(s.dataInvio).toLocaleDateString("it-IT") : "",
+      s.dataInvio ? formataData(s.dataInvio) : "",
       s.livelloRecidiva,
       s.allegati?.length ?? 0,
-      new Date(s.createdAt).toLocaleDateString("it-IT"),
+      formataData(s.createdAt),
     ]
       .map(csvEscape)
-      .join(",")
+      .join(";"),
   );
 
-  const csv = "\uFEFF" + headers.map(csvEscape).join(",") + "\n" + rows.join("\n");
+  // Separatore punto e virgola: è quello predefinito di Excel in configurazione italiana.
+  const csv = "\uFEFF" + headers.map(csvEscape).join(";") + "\n" + rows.join("\n");
 
-  const filename = `segnalazioni-${new Date().toISOString().slice(0, 10)}.csv`;
+  const filename = `segnalazioni-${new Date().toLocaleDateString("sv-SE", { timeZone: FUSO_ORARIO_UI })}.csv`;
   return new NextResponse(csv, {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",

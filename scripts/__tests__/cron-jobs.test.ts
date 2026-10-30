@@ -73,7 +73,7 @@ vi.mock("@/lib/gdpr", () => ({
 // Mock di fs/promises per cleanupFileOrfani (readdir su UPLOADS_ROOT)
 vi.mock("fs/promises", () => ({
   readdir: vi.fn().mockRejectedValue(new Error("ENOENT")),
-  stat: vi.fn(),
+  lstat: vi.fn(),
   rm: vi.fn(),
 }));
 
@@ -94,7 +94,7 @@ vi.spyOn(console, "error").mockImplementation(() => {});
 // Mock process.exit per prevenire chiusura del processo di test
 const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
   // Non fare nulla: previene la chiusura del processo di test
-}) as any);
+}) as never);
 
 import { logger } from "../../src/lib/logger";
 
@@ -105,7 +105,7 @@ describe("cron-jobs.ts", () => {
     delete process.env.TRANSIZIONE_INVIATA_GIORNI;
     delete process.env.RETENTION_SEGNALAZIONI_ANNI;
     mockAnonimizza.mockClear();
-    mockAnonimizza.mockResolvedValue(undefined);
+    mockAnonimizza.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -124,51 +124,44 @@ describe("cron-jobs.ts", () => {
     mockDb.storicoStato.create.mockResolvedValue({});
 
     vi.resetModules();
-    await import("../../scripts/cron-jobs");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    const modulo = await import("../../scripts/cron-jobs");
+    await modulo.run();
 
     expect(mockDb.sessione.deleteMany).toHaveBeenCalled();
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({}),
-      expect.stringContaining("Inizio cron jobs")
-    );
+    expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({}), expect.stringContaining("Inizio cron jobs"));
   });
 
   it("transita segnalazioni inviata → in_attesa dopo N giorni", async () => {
     process.env.TRANSIZIONE_INVIATA_GIORNI = "7";
     mockDb.sessione.deleteMany.mockResolvedValue({ count: 0 });
-    mockDb.segnalazione.findMany
-      .mockResolvedValueOnce([{ id: "s1", volontarioId: "v1" }])
-      .mockResolvedValueOnce([]);
+    mockDb.segnalazione.findMany.mockResolvedValueOnce([{ id: "s1", volontarioId: "v1" }]).mockResolvedValueOnce([]);
     mockDb.segnalazione.updateMany.mockResolvedValue({ count: 1 });
     mockDb.storicoStato.create.mockResolvedValue({});
 
     vi.resetModules();
-    await import("../../scripts/cron-jobs");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    const modulo = await import("../../scripts/cron-jobs");
+    await modulo.run();
 
     expect(mockDb.segnalazione.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: { stato: "in_attesa" },
-      })
+      }),
     );
   });
 
   it("non crea storico se updateMany ritorna count=0 (race condition)", async () => {
     mockDb.sessione.deleteMany.mockResolvedValue({ count: 0 });
-    mockDb.segnalazione.findMany
-      .mockResolvedValueOnce([{ id: "s1", volontarioId: "v1" }])
-      .mockResolvedValueOnce([]);
+    mockDb.segnalazione.findMany.mockResolvedValueOnce([{ id: "s1", volontarioId: "v1" }]).mockResolvedValueOnce([]);
     mockDb.segnalazione.updateMany.mockResolvedValue({ count: 0 });
     mockDb.storicoStato.create.mockResolvedValue({});
 
     vi.resetModules();
-    await import("../../scripts/cron-jobs");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    const modulo = await import("../../scripts/cron-jobs");
+    await modulo.run();
 
     const createCalls = mockDb.storicoStato.create.mock.calls;
     const transizioneCalls = createCalls.filter(
-      (call) => (call[0] as any).data?.statoPrecedente === "inviata"
+      (call) => (call[0] as { data?: { statoPrecedente?: string } }).data?.statoPrecedente === "inviata",
     );
     expect(transizioneCalls).toHaveLength(0);
   });
@@ -176,15 +169,26 @@ describe("cron-jobs.ts", () => {
   it("anonimizza segnalazioni tramite anonimizzaSegnalazione (lib condivisa)", async () => {
     process.env.RETENTION_SEGNALAZIONI_ANNI = "10";
     mockDb.sessione.deleteMany.mockResolvedValue({ count: 0 });
-    mockDb.segnalazione.findMany
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: "s-old" }]);
+    mockDb.segnalazione.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "s-old" }]);
 
     vi.resetModules();
-    await import("../../scripts/cron-jobs");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    const modulo = await import("../../scripts/cron-jobs");
+    await modulo.run();
 
-    expect(mockAnonimizza).toHaveBeenCalledWith("s-old", 10, null);
+    expect(mockAnonimizza).toHaveBeenCalledWith(mockDb, "s-old", 10, null);
+  });
+
+  it("non conta pratiche diventate non idonee durante l'anonimizzazione", async () => {
+    mockDb.sessione.deleteMany.mockResolvedValue({ count: 0 });
+    mockDb.segnalazione.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "s-riaperta" }]);
+    mockAnonimizza.mockResolvedValueOnce(false);
+    vi.resetModules();
+    const modulo = await import("../../scripts/cron-jobs");
+    await modulo.run();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 0, retentionAnni: expect.any(Number) }),
+      "Segnalazioni anonimizzate per GDPR retention",
+    );
   });
 
   it("logga errori e chiama process.exit(1) su eccezione", async () => {
@@ -192,37 +196,30 @@ describe("cron-jobs.ts", () => {
 
     vi.resetModules();
     try {
-      await import("../../scripts/cron-jobs");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      const modulo = await import("../../scripts/cron-jobs");
+      await modulo.run();
     } catch {
       // Expected: process.exit throws
     }
 
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.objectContaining({}),
-      "Errore cron jobs"
-    );
+    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({}), "Errore cron jobs");
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
   it("chiama $disconnect nel finally", async () => {
     mockDb.sessione.deleteMany.mockResolvedValue({ count: 0 });
-    mockDb.segnalazione.findMany
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
+    mockDb.segnalazione.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
     vi.resetModules();
-    await import("../../scripts/cron-jobs");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    const modulo = await import("../../scripts/cron-jobs");
+    await modulo.run();
 
     expect(mockDb.$disconnect).toHaveBeenCalled();
   });
 
   it("logga file orfani rimossi quando cleanupFileOrfani ritorna >0", async () => {
     mockDb.sessione.deleteMany.mockResolvedValue({ count: 0 });
-    mockDb.segnalazione.findMany
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
+    mockDb.segnalazione.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     // Simula cleanupFileOrfani che trova e rimuove 1 directory orfana
     mockDb.allegato.findMany.mockResolvedValue([]);
     // segnalazione.findMany è già mockato sopra per 2 chiamate;
@@ -231,46 +228,61 @@ describe("cron-jobs.ts", () => {
 
     // Override readdir per simulare una directory orfana
     const { readdir: mockReaddir } = await import("fs/promises");
-    vi.mocked(mockReaddir).mockResolvedValueOnce(["orphan-dir"] as any);
-    const { stat: mockStat } = await import("fs/promises");
-    vi.mocked(mockStat).mockResolvedValue({ isDirectory: () => true } as any);
+    vi.mocked(mockReaddir).mockResolvedValueOnce(["orphan-dir"] as never);
+    const { lstat: mockStat } = await import("fs/promises");
+    vi.mocked(mockStat).mockResolvedValue({ isDirectory: () => true } as never);
     const { rm: mockRm } = await import("fs/promises");
     vi.mocked(mockRm).mockResolvedValue(undefined);
 
     vi.resetModules();
-    await import("../../scripts/cron-jobs");
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    const modulo = await import("../../scripts/cron-jobs");
+    await modulo.run();
 
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({}),
-      expect.stringContaining("File orfani rimossi")
+      expect.stringContaining("File orfani rimossi"),
     );
   });
 
-  it("anonimizzaSegnalazione gestisce errore filesystem (catch non bloccante)", async () => {
+  it("un errore su una segnalazione non blocca l'anonimizzazione delle successive", async () => {
     process.env.RETENTION_SEGNALAZIONI_ANNI = "10";
     mockDb.sessione.deleteMany.mockResolvedValue({ count: 0 });
-    mockDb.segnalazione.findMany
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: "s-fs-err" }]);
-
-    // Simula errore filesystem nel rm
-    vi.doMock("@/lib/gdpr", () => ({
-      anonimizzaSegnalazione: vi.fn().mockImplementation(async (id: string) => {
-        // Simula il comportamento: prova rm, fallisce, ma continua
-        throw new Error("filesystem error");
-      }),
-    }));
+    mockDb.segnalazione.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "s-fs-err" }, { id: "s-ok" }]);
+    mockAnonimizza.mockRejectedValueOnce(new Error("filesystem error")).mockResolvedValueOnce(true);
 
     vi.resetModules();
-    try {
-      await import("../../scripts/cron-jobs");
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    } catch {
-      // L'errore del singolo record non deve bloccare il cron
-    }
+    const modulo = await import("../../scripts/cron-jobs");
+    await modulo.run();
 
-    // Verifica che il cron abbia tentato l'anonimizzazione
-    expect(mockAnonimizza).not.toHaveBeenCalled(); // Il mock è stato sostituito dal doMock
+    expect(mockAnonimizza).toHaveBeenCalledTimes(2);
+    expect(mockAnonimizza).toHaveBeenNthCalledWith(2, mockDb, "s-ok", 10, null);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ segnalazioneId: "s-fs-err" }),
+      expect.stringContaining("continuo col prossimo"),
+    );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Lock di maintenance già occupato: l'esecuzione esce senza eseguire i job.
+// Punto d'ingresso cron-entry: importarlo avvia la maintenance.
+// -----------------------------------------------------------------------------
+describe("cron-jobs.ts - lock occupato e punto d'ingresso", () => {
+  it("con lock occupato registra l'uscita e non esegue la maintenance", async () => {
+    mockDb.$queryRaw.mockResolvedValueOnce([{ acquired: false }]);
+    const modulo = await import("../../scripts/cron-jobs");
+    await modulo.run();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("già in corso"));
+    expect(mockAnonimizza).not.toHaveBeenCalled();
+  });
+
+  it("il punto d'ingresso avvia la maintenance all'importazione", async () => {
+    await import("../../scripts/cron-entry");
+    await vi.waitFor(() =>
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ timestamp: expect.any(String) }),
+        "Cron jobs completati.",
+      ),
+    );
   });
 });

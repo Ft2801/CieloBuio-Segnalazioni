@@ -7,6 +7,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSessionUser, getVisibilityFilter } from "@/lib/auth";
+import { getReminderGiorni } from "@/lib/cron-utils";
 
 export async function GET() {
   const user = await getSessionUser();
@@ -16,16 +17,26 @@ export async function GET() {
 
   const visFilter = getVisibilityFilter(user);
 
-  // Pratiche in attesa da più di 30 giorni (per reminder)
-  const trentaGiorniFa = new Date();
-  trentaGiorniFa.setDate(trentaGiorniFa.getDate() - 30);
+  // Pratiche in attesa oltre la soglia dei reminder (REMINDER_GIORNI, default 30):
+  // stessa soglia usata da GET /api/reminder, così i due conteggi coincidono.
+  const sogliaGiorni = getReminderGiorni();
+  const sogliaReminder = new Date();
+  sogliaReminder.setDate(sogliaReminder.getDate() - sogliaGiorni);
 
   // Esegue tutti i count in parallelo per ridurre la latenza (10 query
   // sequenziali su PostgreSQL richiederebbero 10 round-trip; in parallelo
   // vengono eseguite in un unico ciclo di event loop).
   const [
-    totali, bozze, inRevisione, approvate, inviate,
-    inAttesa, chiusePositive, chiuseNegative, recidive, inAttesaOverdue,
+    totali,
+    bozze,
+    inRevisione,
+    approvate,
+    inviate,
+    inAttesa,
+    chiusePositive,
+    chiuseNegative,
+    recidive,
+    inAttesaOverdue,
   ] = await Promise.all([
     db.segnalazione.count({ where: visFilter }),
     db.segnalazione.count({ where: { ...visFilter, stato: "bozza" } }),
@@ -40,12 +51,13 @@ export async function GET() {
       where: {
         ...visFilter,
         stato: "in_attesa",
-        dataInvio: { lt: trentaGiorniFa },
+        dataInvio: { lt: sogliaReminder },
       },
     }),
   ]);
 
   return NextResponse.json({
+    sogliaGiorni,
     totali,
     bozze,
     inRevisione,

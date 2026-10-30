@@ -2,6 +2,7 @@
  * Test di integrazione per /api/auth/logout
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createHash } from "crypto";
 
 vi.mock("next/headers", () => ({
   cookies: vi.fn(),
@@ -25,17 +26,19 @@ describe("POST /api/auth/logout", () => {
   });
 
   it("chiama deleteMany e ritorna ok se token presente", async () => {
-    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as any);
-    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 1 } as any);
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as never);
+    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 1 } as never);
     const res = await POST();
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.ok).toBe(true);
-    expect(db.sessione.deleteMany).toHaveBeenCalledWith({ where: { token: "1a7674eb4ee78df7e1ac439a93c3fa8e3c945784d4dec9fd8e3011738b2f1d62" } });
+    expect(db.sessione.deleteMany).toHaveBeenCalledWith({
+      where: { token: createHash("sha256").update("tok").digest("hex") },
+    });
   });
 
   it("ritorna ok anche senza token (no-op)", async () => {
-    vi.mocked(cookies).mockResolvedValue({ get: () => undefined } as any);
+    vi.mocked(cookies).mockResolvedValue({ get: () => undefined } as never);
     const res = await POST();
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -44,7 +47,7 @@ describe("POST /api/auth/logout", () => {
   });
 
   it("ritorna ok anche se deleteMany fallisce (catch best-effort)", async () => {
-    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as any);
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as never);
     vi.mocked(db.sessione.deleteMany).mockRejectedValue(new Error("DB error"));
     const res = await POST();
     expect(res.status).toBe(200);

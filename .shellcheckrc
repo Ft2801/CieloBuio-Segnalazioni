@@ -1,0 +1,11 @@
+# Configurazione di ShellCheck (lint degli script shell, eseguito in CI).
+# Gli script del progetto sono Bash (vedi scripts/deploy.sh).
+shell=bash
+
+# Nessuna risorsa esterna: ogni script deve essere leggibile da solo.
+external-sources=false
+
+# SC2317: funzioni usate solo come handler di trap EXIT non vengono rilevate
+# come raggiungibili da ShellCheck. Disabilitato a livello globale perché
+# il pattern trap ... EXIT è usato in più script.
+disable=SC2317

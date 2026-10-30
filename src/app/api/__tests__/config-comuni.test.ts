@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
+import { Prisma } from "@prisma/client";
 
 vi.mock("next/headers", () => ({ cookies: vi.fn() }));
 
@@ -35,27 +36,56 @@ import { GET, POST } from "@/app/api/config/comuni/route";
 import { PUT, DELETE } from "@/app/api/config/comuni/[id]/route";
 
 const ADMIN_SESSION = {
-  id: "s1", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s1",
+  token: "tok",
+  scadenza: new Date(Date.now() + 10000),
   user: {
-    id: "u1", email: "a@t.it", nomeCognome: "Admin", ruolo: "admin",
-    provinciaId: null, regioneId: null, inizialiProtocollo: "AD",
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true,
+    id: "u1",
+    email: "a@t.it",
+    nomeCognome: "Admin",
+    ruolo: "admin",
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: "AD",
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
+    attivo: true,
   },
 };
 const VOL_SESSION = {
-  id: "s2", token: "tok", scadenza: new Date(Date.now() + 10000),
+  id: "s2",
+  token: "tok",
+  scadenza: new Date(Date.now() + 10000),
   user: {
-    id: "u2", email: "v@t.it", nomeCognome: "Volontario", ruolo: "volontario",
-    provinciaId: null, regioneId: null, inizialiProtocollo: "VL",
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true,
+    id: "u2",
+    email: "v@t.it",
+    nomeCognome: "Volontario",
+    ruolo: "volontario",
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: "VL",
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
+    attivo: true,
   },
 };
 
-function mockSession(user: any) {
+function mockSession(user: unknown) {
   vi.mocked(cookies).mockResolvedValue({
     get: () => (user ? { value: "tok" } : undefined),
-  } as any);
-  vi.mocked(db.sessione.findUnique).mockResolvedValue((user ?? null) as any);
+  } as never);
+  vi.mocked(db.sessione.findUnique).mockResolvedValue((user ?? null) as never);
+}
+
+function erroreNoto(code: string): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError("errore prisma", {
+    code,
+    clientVersion: "test",
+  });
 }
 
 function makeReq(method: string, body?: unknown, url = "http://localhost/api/config/comuni"): NextRequest {
@@ -79,20 +109,34 @@ describe("GET /api/config/comuni", () => {
     // GET non ha check admin: serve per popolare i dropdown nei form
     mockSession(VOL_SESSION);
     vi.mocked(db.comune.findMany).mockResolvedValue([
-      { id: 1, nome: "Bergamo", provincia: { sigla: "BG", nome: "Bergamo", regione: { regione: "LOMBARDIA" } } },
-    ] as any);
+      {
+        id: 1,
+        nome: "Bergamo",
+        provincia: { sigla: "BG", nome: "Bergamo", regione: { regione: "LOMBARDIA", riferimentoLegge: "LR 31/2015" } },
+      },
+    ] as never);
     vi.mocked(db.comune.count).mockResolvedValue(1);
     const res = await GET(makeReq("GET"));
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.comuni).toHaveLength(1);
+    expect(json.comuni[0].provincia.regione.riferimentoLegge).toBe("LR 31/2015");
+    expect(db.comune.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: {
+          provincia: {
+            select: { sigla: true, nome: true, regione: { select: { regione: true, riferimentoLegge: true } } },
+          },
+        },
+      }),
+    );
     expect(json.total).toBe(1);
     expect(json.truncated).toBe(false);
   });
 
   it("segnala truncated=true quando il totale supera il limite", async () => {
     mockSession(ADMIN_SESSION);
-    vi.mocked(db.comune.findMany).mockResolvedValue([] as any);
+    vi.mocked(db.comune.findMany).mockResolvedValue([] as never);
     // Senza search il limite è 500: con total=600 deve risultare truncated
     vi.mocked(db.comune.count).mockResolvedValue(600);
     const res = await GET(makeReq("GET"));
@@ -103,15 +147,18 @@ describe("GET /api/config/comuni", () => {
 
   it("passa i filtri provinciaId e search alla query", async () => {
     mockSession(ADMIN_SESSION);
-    vi.mocked(db.comune.findMany).mockResolvedValue([] as any);
+    vi.mocked(db.comune.findMany).mockResolvedValue([] as never);
     vi.mocked(db.comune.count).mockResolvedValue(0);
     const res = await GET(makeReq("GET", undefined, "http://localhost/api/config/comuni?provinciaId=3&search=berg"));
     expect(res.status).toBe(200);
-    expect(db.comune.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { provinciaId: 3, nome: { contains: "berg", mode: "insensitive" } },
-      take: 50,
-    }));
+    expect(db.comune.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { provinciaId: 3, nome: { contains: "berg", mode: "insensitive" } },
+        take: 50,
+      }),
+    );
   });
+
   it("ritorna 400 se provinciaId query param non è numerico", async () => {
     mockSession(VOL_SESSION);
     const res = await GET(makeReq("GET", undefined, "http://localhost/api/config/comuni?provinciaId=abc"));
@@ -119,16 +166,22 @@ describe("GET /api/config/comuni", () => {
     const json = await res.json();
     expect(json.error).toContain("provinciaId non valido");
   });
+
+  it.each(["1e3", "2147483648", "0"])("rifiuta il filtro provinciaId fuori formato: %s", async (id) => {
+    mockSession(VOL_SESSION);
+    const res = await GET(makeReq("GET", undefined, `http://localhost/api/config/comuni?provinciaId=${id}`));
+    expect(res.status).toBe(400);
+    expect(db.comune.findMany).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/config/comuni", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("ritorna 403 se non autenticato (no cookie -> 403, non 401)", async () => {
-    // POST ha check `!user || !canManageConfiguration(user)` -> 403 per entrambi i casi
+  it("ritorna 401 se non autenticato", async () => {
     mockSession(null);
     const res = await POST(makeReq("POST", {}));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it("ritorna 403 per non-admin (volontario)", async () => {
@@ -143,6 +196,23 @@ describe("POST /api/config/comuni", () => {
     expect(res.status).toBe(400);
     const json = await res.json();
     expect(json.error).toContain("provinciaId");
+  });
+
+  it.each([true, [1], "1e3", 2147483648])("rifiuta provinciaId non intero DB in creazione: %j", async (id) => {
+    mockSession(ADMIN_SESSION);
+    const res = await POST(makeReq("POST", { nome: "X", provinciaId: id, cap: "24100", pecComune: "x@pec.it" }));
+    expect(res.status).toBe(400);
+    expect(db.comune.create).not.toHaveBeenCalled();
+  });
+
+  it("normalizza la stringa numerica del menu dei Comuni senza convertire altri tipi", async () => {
+    mockSession(ADMIN_SESSION);
+    vi.mocked(db.comune.create).mockResolvedValue({ id: 1 } as never);
+    const res = await POST(makeReq("POST", { nome: "X", provinciaId: "3", cap: "24100", pecComune: "x@pec.it" }));
+    expect(res.status).toBe(201);
+    expect(db.comune.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ provinciaId: 3 }) }),
+    );
   });
 
   it("ritorna 400 se nome mancante", async () => {
@@ -169,15 +239,37 @@ describe("POST /api/config/comuni", () => {
     expect(res.status).toBe(400);
   });
 
+  it.each(["nomeSindaco", "noteAggiornamento"])(
+    "rifiuta il valore booleano false nel campo testuale %s in creazione",
+    async (campo) => {
+      mockSession(ADMIN_SESSION);
+      const res = await POST(
+        makeReq("POST", { nome: "Bergamo", provinciaId: 1, cap: "24100", pecComune: "x@pec.it", [campo]: false }),
+      );
+      expect(res.status).toBe(400);
+      expect(db.comune.create).not.toHaveBeenCalled();
+    },
+  );
+
   it("crea comune valido ritorna 201", async () => {
     mockSession(ADMIN_SESSION);
     vi.mocked(db.comune.create).mockResolvedValue({
-      id: 10, nome: "Bergamo", provinciaId: 1, cap: "24100", pecComune: "x@pec.it",
-    } as any);
-    const res = await POST(makeReq("POST", {
-      nome: "Bergamo", provinciaId: 1, cap: "24100", pecComune: "x@pec.it",
-      nomeSindaco: "Mario Rossi", noteAggiornamento: "verificato",
-    }));
+      id: 10,
+      nome: "Bergamo",
+      provinciaId: 1,
+      cap: "24100",
+      pecComune: "x@pec.it",
+    } as never);
+    const res = await POST(
+      makeReq("POST", {
+        nome: "Bergamo",
+        provinciaId: 1,
+        cap: "24100",
+        pecComune: "x@pec.it",
+        nomeSindaco: "Mario Rossi",
+        noteAggiornamento: "verificato",
+      }),
+    );
     expect(res.status).toBe(201);
     const json = await res.json();
     expect(json.comune.id).toBe(10);
@@ -185,30 +277,56 @@ describe("POST /api/config/comuni", () => {
 
   it("normalizza campi opzionali vuoti a null", async () => {
     mockSession(ADMIN_SESSION);
-    vi.mocked(db.comune.create).mockResolvedValue({ id: 11 } as any);
-    await POST(makeReq("POST", {
-      nome: "Vuoto", provinciaId: 1, cap: "24100", pecComune: "x@pec.it",
-      nomeSindaco: "", noteAggiornamento: "",
-    }));
-    expect(db.comune.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ nomeSindaco: null, noteAggiornamento: null }),
-    }));
+    vi.mocked(db.comune.create).mockResolvedValue({ id: 11 } as never);
+    await POST(
+      makeReq("POST", {
+        nome: "Vuoto",
+        provinciaId: 1,
+        cap: "24100",
+        pecComune: "x@pec.it",
+        nomeSindaco: "",
+        noteAggiornamento: "",
+      }),
+    );
+    expect(db.comune.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ nomeSindaco: null, noteAggiornamento: null }),
+      }),
+    );
   });
 
   it("ritorna 400 se provinciaId è 0 (falsy, ternary false branch)", async () => {
     mockSession(ADMIN_SESSION);
-    const res = await POST(makeReq("POST", {
-      nome: "X", provinciaId: 0, cap: "24100", pecComune: "x@pec.it",
-    }));
+    const res = await POST(
+      makeReq("POST", {
+        nome: "X",
+        provinciaId: 0,
+        cap: "24100",
+        pecComune: "x@pec.it",
+      }),
+    );
     expect(res.status).toBe(400);
   });
 
   it("ritorna 400 se provinciaId è null (falsy, ternary false branch)", async () => {
     mockSession(ADMIN_SESSION);
-    const res = await POST(makeReq("POST", {
-      nome: "X", provinciaId: null, cap: "24100", pecComune: "x@pec.it",
-    }));
+    const res = await POST(
+      makeReq("POST", {
+        nome: "X",
+        provinciaId: null,
+        cap: "24100",
+        pecComune: "x@pec.it",
+      }),
+    );
     expect(res.status).toBe(400);
+  });
+
+  it("ritorna 400 se la provincia non esiste (violazione di chiave esterna)", async () => {
+    mockSession(ADMIN_SESSION);
+    vi.mocked(db.comune.create).mockRejectedValue(erroreNoto("P2003"));
+    const res = await POST(makeReq("POST", { nome: "Bergamo", provinciaId: 999, cap: "24100", pecComune: "x@pec.it" }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("Provincia non trovata");
   });
 
   it("ritorna 500 su errore DB con dati validi", async () => {
@@ -222,58 +340,120 @@ describe("POST /api/config/comuni", () => {
 describe("PUT /api/config/comuni/[id]", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("ritorna 403 se non admin", async () => {
+  it("ritorna 401 se non autenticato", async () => {
     mockSession(null);
     const res = await PUT(makeReq("PUT", { nome: "X" }), { params: Promise.resolve({ id: "1" }) });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it("ritorna 400 se ID non numerico", async () => {
     mockSession(ADMIN_SESSION);
-    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), { params: Promise.resolve({ id: "abc" }) });
+    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), {
+      params: Promise.resolve({ id: "abc" }),
+    });
     expect(res.status).toBe(400);
   });
 
   it("ritorna 400 se provinciaId non numerico", async () => {
     mockSession(ADMIN_SESSION);
-    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: "xyz", cap: "24100", pecComune: "x@pec.it" }), { params: Promise.resolve({ id: "1" }) });
+    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: "xyz", cap: "24100", pecComune: "x@pec.it" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
     expect(res.status).toBe(400);
+  });
+
+  it.each([true, [1], 2147483648])("rifiuta provinciaId di tipo errato o oltre Int32 in modifica: %j", async (id) => {
+    mockSession(ADMIN_SESSION);
+    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: id, cap: "24100", pecComune: "x@pec.it" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
+    expect(res.status).toBe(400);
+    expect(db.comune.update).not.toHaveBeenCalled();
   });
 
   it("ritorna 400 se provinciaId è 0 (falsy, ternary false branch)", async () => {
     mockSession(ADMIN_SESSION);
-    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: 0, cap: "24100", pecComune: "x@pec.it" }), { params: Promise.resolve({ id: "1" }) });
+    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: 0, cap: "24100", pecComune: "x@pec.it" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
     expect(res.status).toBe(400);
   });
 
   it("ritorna 400 se validazione fallisce (nome vuoto)", async () => {
     mockSession(ADMIN_SESSION);
-    const res = await PUT(makeReq("PUT", { nome: "", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), { params: Promise.resolve({ id: "1" }) });
+    const res = await PUT(makeReq("PUT", { nome: "", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
     expect(res.status).toBe(400);
   });
+
+  it.each(["nomeSindaco", "noteAggiornamento"])(
+    "rifiuta il valore numerico zero nel campo testuale %s in modifica",
+    async (campo) => {
+      mockSession(ADMIN_SESSION);
+      const res = await PUT(
+        makeReq("PUT", { nome: "Bergamo", provinciaId: 1, cap: "24100", pecComune: "x@pec.it", [campo]: 0 }),
+        { params: Promise.resolve({ id: "1" }) },
+      );
+      expect(res.status).toBe(400);
+      expect(db.comune.update).not.toHaveBeenCalled();
+    },
+  );
 
   it("ritorna 404 se comune non trovato", async () => {
     mockSession(ADMIN_SESSION);
     vi.mocked(db.comune.findUnique).mockResolvedValue(null);
-    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), { params: Promise.resolve({ id: "1" }) });
+    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
     expect(res.status).toBe(404);
   });
 
   it("aggiorna comune valido ritorna 200", async () => {
     mockSession(ADMIN_SESSION);
-    vi.mocked(db.comune.findUnique).mockResolvedValue({ id: 1, nome: "Vecchio" } as any);
-    vi.mocked(db.comune.update).mockResolvedValue({ id: 1, nome: "Nuovo" } as any);
-    const res = await PUT(makeReq("PUT", { nome: "Nuovo", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), { params: Promise.resolve({ id: "1" }) });
+    vi.mocked(db.comune.findUnique).mockResolvedValue({
+      id: 1,
+      nome: "Vecchio",
+      provinciaId: 1,
+      _count: { segnalazioni: 0 },
+    } as never);
+    vi.mocked(db.comune.update).mockResolvedValue({ id: 1, nome: "Nuovo" } as never);
+    const res = await PUT(makeReq("PUT", { nome: "Nuovo", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.comune.nome).toBe("Nuovo");
   });
 
+  it("ritorna 400 se la provincia non esiste (violazione di chiave esterna)", async () => {
+    mockSession(ADMIN_SESSION);
+    vi.mocked(db.comune.findUnique).mockResolvedValue({
+      id: 1,
+      provinciaId: 1,
+      _count: { segnalazioni: 0 },
+    } as never);
+    vi.mocked(db.comune.update).mockRejectedValue(erroreNoto("P2003"));
+    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: 999, cap: "24100", pecComune: "x@pec.it" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe(
+      "Provincia non trovata o territorio collegato a segnalazioni. Verificare i dati e ricaricare la pagina.",
+    );
+  });
+
   it("ritorna 500 su errore DB in update", async () => {
     mockSession(ADMIN_SESSION);
-    vi.mocked(db.comune.findUnique).mockResolvedValue({ id: 1 } as any);
+    vi.mocked(db.comune.findUnique).mockResolvedValue({
+      id: 1,
+      provinciaId: 1,
+      _count: { segnalazioni: 0 },
+    } as never);
     vi.mocked(db.comune.update).mockRejectedValue(new Error("DB error"));
-    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), { params: Promise.resolve({ id: "1" }) });
+    const res = await PUT(makeReq("PUT", { nome: "X", provinciaId: 1, cap: "24100", pecComune: "x@pec.it" }), {
+      params: Promise.resolve({ id: "1" }),
+    });
     expect(res.status).toBe(500);
   });
 });
@@ -281,10 +461,10 @@ describe("PUT /api/config/comuni/[id]", () => {
 describe("DELETE /api/config/comuni/[id]", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("ritorna 403 se non admin", async () => {
+  it("ritorna 401 se non autenticato", async () => {
     mockSession(null);
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it("ritorna 400 se ID non numerico", async () => {
@@ -303,9 +483,10 @@ describe("DELETE /api/config/comuni/[id]", () => {
   it("ritorna 400 se ci sono segnalazioni collegate", async () => {
     mockSession(ADMIN_SESSION);
     vi.mocked(db.comune.findUnique).mockResolvedValue({
-      id: 1, nome: "Bergamo",
+      id: 1,
+      nome: "Bergamo",
       _count: { segnalazioni: 3 },
-    } as any);
+    } as never);
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
     expect(res.status).toBe(400);
     const json = await res.json();
@@ -315,10 +496,11 @@ describe("DELETE /api/config/comuni/[id]", () => {
   it("elimina comune valido ritorna 200", async () => {
     mockSession(ADMIN_SESSION);
     vi.mocked(db.comune.findUnique).mockResolvedValue({
-      id: 1, nome: "Bergamo",
+      id: 1,
+      nome: "Bergamo",
       _count: { segnalazioni: 0 },
-    } as any);
-    vi.mocked(db.comune.delete).mockResolvedValue({} as any);
+    } as never);
+    vi.mocked(db.comune.delete).mockResolvedValue({} as never);
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -328,11 +510,22 @@ describe("DELETE /api/config/comuni/[id]", () => {
   it("ritorna 500 su errore DB in delete", async () => {
     mockSession(ADMIN_SESSION);
     vi.mocked(db.comune.findUnique).mockResolvedValue({
-      id: 1, nome: "Bergamo",
+      id: 1,
+      nome: "Bergamo",
       _count: { segnalazioni: 0 },
-    } as any);
+    } as never);
     vi.mocked(db.comune.delete).mockRejectedValue(new Error("DB error"));
     const res = await DELETE(makeReq("DELETE"), { params: Promise.resolve({ id: "1" }) });
     expect(res.status).toBe(500);
+  });
+});
+
+describe("autorizzazione: sessione senza permessi di configurazione", () => {
+  it("ritorna 403 a un volontario su POST, PUT e DELETE", async () => {
+    mockSession(VOL_SESSION);
+    const ctx = { params: Promise.resolve({ id: "1" }) };
+    expect((await POST(makeReq("POST", {}))).status).toBe(403);
+    expect((await PUT(makeReq("PUT", {}), ctx)).status).toBe(403);
+    expect((await DELETE(makeReq("DELETE"), ctx)).status).toBe(403);
   });
 });

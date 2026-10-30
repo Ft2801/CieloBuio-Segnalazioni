@@ -21,6 +21,7 @@ import {
   getActiveDemoSession,
   clearDemoSession,
   type DemoSessionUser,
+  DEMO_ABILITATA,
 } from "@/lib/demo-mode";
 
 export function useSession() {
@@ -34,6 +35,13 @@ export function useSession() {
     const demo = getActiveDemoSession();
     if (demo) {
       setUser(demo);
+      setLoading(false);
+      return;
+    }
+    // Nell'export statico non esistono API: una richiesta assoluta a /api
+    // colpirebbe la radice del dominio Pages, non questa applicazione.
+    if (DEMO_ABILITATA) {
+      setUser(null);
       setLoading(false);
       return;
     }
@@ -53,38 +61,46 @@ export function useSession() {
     refresh();
   }, [refresh]);
 
-  const login = useCallback(async (email: string, password: string, totpToken?: string) => {
-    // 1. Verifica PRIMA le credenziali demo, senza toccare la rete.
-    // Questo è ciò che rende la modalità demo utilizzabile anche offline
-    // o a server spento: se corrispondono, non si tenta nessun fetch.
-    const demoAccount = matchDemoAccount(email, password);
-    if (demoAccount) {
-      const demoUser = activateDemoSession(demoAccount);
-      setUser(demoUser);
-      return { ok: true, user: demoUser };
-    }
-
-    // 2. Altrimenti, prova il login reale contro il server.
-    // Include totpToken se fornito (per utenti con 2FA attivo).
-    const body: Record<string, string> = { email, password };
-    if (totpToken) body.totpToken = totpToken;
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      // Se il server richiede 2FA, ritorna il flag invece di lanciare
-      // un errore, permettendo alla UI di mostrare il campo TOTP.
-      if (data.requiresTotp) {
-        return { ok: false, requiresTotp: true, error: data.error };
+  const login = useCallback(
+    async (email: string, password: string, totpToken?: string) => {
+      // 1. Verifica PRIMA le credenziali demo, senza toccare la rete.
+      // Questo è ciò che rende la modalità demo utilizzabile anche offline
+      // o a server spento: se corrispondono, non si tenta nessun fetch.
+      const demoAccount = matchDemoAccount(email, password);
+      if (demoAccount) {
+        const demoUser = activateDemoSession(demoAccount);
+        setUser(demoUser);
+        return { ok: true, user: demoUser };
       }
-      throw new Error(data.error ?? "Errore di accesso");
-    }
-    await refresh();
-    return data;
-  }, [refresh]);
+      // Non trasmettere credenziali reali alla radice del dominio Pages:
+      // l'export statico ammette soltanto gli account dimostrativi.
+      if (DEMO_ABILITATA) {
+        throw new Error("Questa demo statica accetta solo gli account dimostrativi.");
+      }
+
+      // 2. Altrimenti, prova il login reale contro il server.
+      // Include totpToken se fornito (per utenti con 2FA attivo).
+      const body: Record<string, string> = { email, password };
+      if (totpToken) body.totpToken = totpToken;
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Se il server richiede 2FA, ritorna il flag invece di lanciare
+        // un errore, permettendo alla UI di mostrare il campo TOTP.
+        if (data.requiresTotp) {
+          return { ok: false, requiresTotp: true, error: data.error };
+        }
+        throw new Error(data.error ?? "Errore di accesso");
+      }
+      await refresh();
+      return data;
+    },
+    [refresh],
+  );
 
   const logout = useCallback(async () => {
     if (getActiveDemoSession()) {

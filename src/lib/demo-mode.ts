@@ -2,9 +2,9 @@
  * Modalità demo, interamente client-side e di sola visualizzazione.
  *
  * Perché esiste:
- * - Il repository è pubblico su GitHub. Non deve contenere pulsanti che
- *   pre-compilano credenziali reali di accesso (vedi commit precedenti):
- *   chiunque legga il bundle JS vedrebbe email e password vere.
+ * - Il repository è pubblico. Non deve contenere pulsanti che pre-compilano
+ *   credenziali reali di accesso: chiunque legga il bundle JS vedrebbe email
+ *   e password vere.
  * - Servono comunque account dimostrativi per mostrare l'interfaccia dei
  *   tre ruoli (volontario, referente, admin) senza dover installare un
  *   database, e idealmente anche a server spento (per demo statiche,
@@ -36,9 +36,19 @@
  * che il server non le riconoscerebbe come credenziali valide.
  */
 
-export type DemoRole = "volontario" | "referente_provinciale" | "admin";
+import type { RuoloUtente } from "@/lib/types";
 
-export type DemoAccount = {
+/**
+ * La modalità demo è attiva solo nella build statica per GitHub Pages
+ * (next.config.pages.ts imposta NEXT_PUBLIC_CIELOBUIO_DEMO=1). Nel sistema
+ * reale gli account demo non vengono riconosciuti: la schermata di login non
+ * mostra dati fittizi a chi usa il sito di produzione.
+ */
+export const DEMO_ABILITATA: boolean = process.env.NEXT_PUBLIC_CIELOBUIO_DEMO === "1";
+
+export type DemoRole = RuoloUtente;
+
+type DemoAccount = {
   email: string;
   password: string;
   ruolo: DemoRole;
@@ -53,19 +63,19 @@ export const DEMO_ACCOUNTS: DemoAccount[] = [
     email: "volontario@demo.cielobuio-segnalazioni.local",
     password: "SoloLettura-Volontario!1",
     ruolo: "volontario",
-    nomeCognome: "Volontario Demo",
+    nomeCognome: "Giulia Ferri",
   },
   {
     email: "referente@demo.cielobuio-segnalazioni.local",
     password: "SoloLettura-Referente!1",
     ruolo: "referente_provinciale",
-    nomeCognome: "Referente Demo",
+    nomeCognome: "Luca Bianchi",
   },
   {
     email: "admin@demo.cielobuio-segnalazioni.local",
     password: "SoloLettura-Admin!1",
     ruolo: "admin",
-    nomeCognome: "Amministratore Demo",
+    nomeCognome: "Anna Conti",
   },
 ];
 
@@ -94,12 +104,9 @@ const DEMO_STORAGE_KEY = "cb_demo_session";
  * l'indirizzo e la password esatti, non c'è modo di scoprirli cliccando).
  */
 export function matchDemoAccount(email: string, password: string): DemoAccount | null {
+  if (!DEMO_ABILITATA) return null;
   const normalized = email.trim().toLowerCase();
-  return (
-    DEMO_ACCOUNTS.find(
-      (a) => a.email.toLowerCase() === normalized && a.password === password
-    ) ?? null
-  );
+  return DEMO_ACCOUNTS.find((a) => a.email.toLowerCase() === normalized && a.password === password) ?? null;
 }
 
 function demoAccountToSessionUser(account: DemoAccount): DemoSessionUser {
@@ -141,6 +148,7 @@ export function activateDemoSession(account: DemoAccount): DemoSessionUser {
 }
 
 export function getActiveDemoSession(): DemoSessionUser | null {
+  if (!DEMO_ABILITATA) return null;
   try {
     const raw = sessionStorage.getItem(DEMO_STORAGE_KEY);
     if (!raw) return null;
@@ -150,18 +158,17 @@ export function getActiveDemoSession(): DemoSessionUser | null {
     // campi mancanti o di tipo sbagliato, causando crash nei componenti
     // downstream che leggono ruolo/provinciaId/ecc. Verifichiamo tutti i
     // campi obbligatori prima di accettare la sessione.
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      (parsed as Record<string, unknown>).isDemo === true
-    ) {
+    if (typeof parsed === "object" && parsed !== null && (parsed as Record<string, unknown>).isDemo === true) {
       const obj = parsed as Record<string, unknown>;
       const ruolo = obj.ruolo;
       if (
         typeof obj.id === "string" &&
         typeof obj.email === "string" &&
         typeof obj.nomeCognome === "string" &&
-        (ruolo === "volontario" || ruolo === "referente_provinciale" || ruolo === "admin") &&
+        (ruolo === "volontario" ||
+          ruolo === "referente_provinciale" ||
+          ruolo === "referente_regionale" ||
+          ruolo === "admin") &&
         (obj.provinciaId === null || typeof obj.provinciaId === "number") &&
         (obj.regioneId === null || typeof obj.regioneId === "number") &&
         (obj.inizialiProtocollo === null || typeof obj.inizialiProtocollo === "string") &&
@@ -207,7 +214,7 @@ export function clearDemoSession(): void {
  * a server spento.
  */
 export const DEMO_READONLY_MESSAGE =
-  "Questo è un account dimostrativo di sola visualizzazione: non può creare, modificare o inviare nulla. Per usare l'applicazione con dati reali, accedi con un account effettivo.";
+  "Operazione non disponibile per questo account: non è consentito creare, modificare o inviare dati.";
 
 /**
  * Riconosce se un oggetto sessione (SessionUser reale o DemoSessionUser)
@@ -216,12 +223,7 @@ export const DEMO_READONLY_MESSAGE =
  * tipo union in ogni componente.
  */
 export function isDemoSession(user: unknown): boolean {
-  return (
-    !!user &&
-    typeof user === "object" &&
-    "isDemo" in user &&
-    (user as { isDemo?: unknown }).isDemo === true
-  );
+  return !!user && typeof user === "object" && "isDemo" in user && (user as { isDemo?: unknown }).isDemo === true;
 }
 
 /**

@@ -1,0 +1,6 @@
+# Le issue vuote non sono ammesse: ogni segnalazione usa un modulo.
+blank_issues_enabled: false
+contact_links:
+  - name: Vulnerabilità di sicurezza
+    url: https://github.com/Ft2801/CieloBuio-Segnalazioni/security/advisories/new
+    about: Non aprire issue pubbliche per le vulnerabilità. Usa la segnalazione privata.

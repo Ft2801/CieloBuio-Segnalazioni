@@ -1,4 +1,4 @@
-# SETUP.md — Guida completa: dal setup locale al deploy in produzione
+# SETUP.md: Guida completa, dal setup locale al deploy in produzione
 
 Questo documento contiene tutti i passaggi precisi per portare il sistema
 CieloBuio Segnalazioni da zero a un ambiente di produzione funzionante,
@@ -22,7 +22,7 @@ non ha lavorato in precedenza su questo codice.
 8. [Deploy su un VPS (passo-passo)](#8-deploy-su-un-vps-passo-passo)
 9. [Job schedulati (cron) obbligatori in produzione](#9-job-schedulati-cron-obbligatori-in-produzione)
 10. [Backup](#10-backup)
-11. [Aggiornamento dell'applicazione dopo il primo deploy](#11-aggiornamento-dellapplicazione-dopo-il-primo-deploy)
+11. [Manutenzione futura dell'installazione](#11-manutenzione-futura-dellinstallazione)
 12. [Pubblicazione su GitHub: cosa è sicuro e cosa no](#12-pubblicazione-su-github-cosa-è-sicuro-e-cosa-no)
 13. [Checklist finale prima di andare online](#13-checklist-finale-prima-di-andare-online)
 14. [Deploy alternativo: Docker Compose](#14-deploy-alternativo-docker-compose)
@@ -34,19 +34,20 @@ non ha lavorato in precedenza su questo codice.
 
 | Livello | Tecnologia | Note |
 |---|---|---|
-| Runtime | **Node.js 22+** | Gestore pacchetti consigliato: **npm** |
+| Runtime | **Node.js 24+** | Gestore pacchetti richiesto: **npm 11+** |
 | Framework web | **Next.js 16** (App Router) | Genera sia il frontend sia le API in un unico progetto |
-| Linguaggio | **TypeScript 5** | Tipizzato, gli errori di tipo bloccano il build (`ignoreBuildErrors: false`) |
+| Linguaggio | **TypeScript 7** | Tipizzato. Il type check con TypeScript 7 è il primo passo di `npm run build`: gli errori di tipo bloccano il build |
 | UI | **React 19** + **Tailwind CSS 4** + **shadcn/ui** | Componenti accessibili, nessun servizio esterno a pagamento |
-| Database | **PostgreSQL 16** via **Prisma ORM** | ACID, MVCC, concorrenza multi-writer, JSONB, full-text search |
+| Database | **PostgreSQL 16** via **Prisma ORM** | ACID, MVCC, concorrenza multi-writer, database relazionale maturo |
 | Autenticazione | Sessioni via cookie **HTTP-only** + **bcryptjs** (hash password, cost 12) | Nessun servizio di autenticazione esterno |
 | Validazione input | **zod** | Ogni endpoint valida i dati ricevuti prima di toccare il database |
 | Invio PEC | **Nodemailer** via SMTP | Funziona con qualunque provider PEC italiano che esponga SMTP |
 | Reverse proxy / HTTPS | **Caddy** | Gestisce automaticamente il certificato TLS (Let's Encrypt), non serve configurarlo a mano |
-| PWA | `manifest.json` + Service Worker | L'app è installabile su Android, iOS e desktop |
+| PWA | `public/manifest.json` + Service Worker | Manifest e caching offline minimale; senza icone il browser non propone l'installazione |
 
-Tutte le librerie sono open source con licenza permissiva (MIT, Apache 2.0,
-ISC): nessun costo di licenza, nessun lock-in verso un fornitore.
+Le dipendenze dirette sono open source con licenza permissiva (per esempio
+MIT, Apache 2.0, ISC): nessun costo di licenza, nessun lock-in verso un fornitore.
+Alcune dipendenze transitive hanno licenze diverse, elencate in `CONTRIBUTING.md`.
 
 ---
 
@@ -54,14 +55,13 @@ ISC): nessun costo di licenza, nessun lock-in verso un fornitore.
 
 Prima di iniziare, assicurati di avere:
 
-- **Node.js 22 o superiore** (verifica con `node --version`)
+- **Node.js 24 o superiore** (verifica con `node --version`)
 - **Git**
 - Un editor di testo o IDE (es. VS Code)
 - Per il deploy in produzione: un **VPS** (server privato virtuale) economico
   con Linux (Ubuntu 22.04+ consigliato), e un **dominio** che punti al suo IP
   (es. `segnalazioni.esempio.it`)
-- Per l'invio PEC reale: una **casella PEC intestata all'associazione
-  CieloBuio** (non al volontario sviluppatore), con accesso SMTP disponibile
+- Per l'invio PEC reale: una **casella PEC intestata a CieloBuio** (non al volontario sviluppatore), con accesso SMTP disponibile
   presso il proprio gestore
 
 ---
@@ -80,19 +80,24 @@ cd CieloBuio-Segnalazioni
 
 ### 3.2 Installa le dipendenze
 
-Usa il gestore pacchetti standard `npm` per installare le dipendenze del progetto:
+Seleziona la versione di Node.js indicata in `.nvmrc` (24), verifica che `npm --version` sia almeno 11 e installa le dipendenze con `npm ci`, che usa esattamente le versioni del `package-lock.json`:
 
 ```bash
-npm install
+nvm use   # oppure fnm use: legge .nvmrc
+npm ci
 ```
+
+`npm ci` esegue anche lo script `prepare`, che installa gli hook Git di Husky (pre-commit con lint-staged). Fuori da un repository Git lo script si limita a segnalarlo e non blocca l'installazione.
 
 ### 3.3 Crea il file delle variabili d'ambiente
 
 ```bash
+umask 077
 cp .env.example .env
+chmod 600 .env
 ```
 
-Il file `.env` creato va bene così com'è per lo sviluppo locale (usa PostgreSQL
+Il file `.env` deve essere leggibile solo dal suo proprietario: può contenere password del database, credenziali PEC e chiavi di cifratura. Il file `.env` creato va bene così com'è per lo sviluppo locale (usa PostgreSQL
 e lascia l'invio PEC disattivato). Non serve modificarlo per iniziare a
 sviluppare. **Non committare mai questo file**: è già escluso da
 `.gitignore`.
@@ -100,7 +105,7 @@ sviluppare. **Non committare mai questo file**: è già escluso da
 ### 3.4 Applica lo schema al database
 
 ```bash
-npm run db:push
+npm run db:migrate
 ```
 
 Questo comando crea tutte le tabelle nel database PostgreSQL configurato in .env
@@ -111,16 +116,23 @@ definite in `prisma/schema.prisma`.
 > un firewall aziendale molto restrittivo, assicurati che quel dominio sia
 > raggiungibile.
 
-### 3.5 Popola le tabelle di configurazione con dati di esempio
+### 3.5 Popola le tabelle di configurazione iniziali
 
 ```bash
 npm run db:seed
 ```
 
-Questo comando inserisce alcune regioni con i relativi riferimenti
-normativi, province e alcuni comuni **di esempio** (i nomi dei sindaci e le
-PEC inserite da questo script sono segnaposto, non dati reali: vanno
-sostituiti dal pannello di amministrazione con i dati veri della tua zona).
+Questo comando inserisce le regioni con i relativi riferimenti normativi,
+le province e i comuni di riferimento. I comuni vengono creati **senza
+sindaco e senza PEC**: i dati reali vanno completati dal pannello di
+amministrazione. Finché la PEC di un comune manca, l'invio PEC delle sue
+segnalazioni viene rifiutato con un messaggio esplicito.
+
+Il seed è ripetibile e non sovrascrive i riferimenti normativi già presenti
+nel database. Se una regione ha cambiato la sua legge, le differenze vengono
+segnalate; per allinearle ai dati del seed si esegue
+`npm run db:seed -- --aggiorna-normativa`. Le modifiche fatte dal pannello
+di amministrazione vengono sovrascritte solo con questo flag.
 
 **Questo script non crea alcun utente.** Per un motivo preciso: il
 repository sarà pubblico, e non deve mai contenere credenziali reali di
@@ -155,6 +167,14 @@ npm run dev
 Apri il browser su `http://localhost:3000` e accedi con le credenziali
 create al passo 3.6.
 
+### 3.8 Controlli di qualità prima di un contributo
+
+```bash
+npm run check
+```
+
+Il comando esegue in sequenza formattazione (Prettier), lint (ESLint con regole di sicurezza), typecheck, analisi del codice inutilizzato (knip), controllo delle licenze delle dipendenze e test con copertura al 100%. La CI esegue gli stessi controlli ad ogni push e pull request.
+
 ---
 
 ## 4. Account dimostrativi (demo, sola visualizzazione)
@@ -163,6 +183,10 @@ Oltre agli account reali, l'applicazione include **tre account dimostrativi
 di sola visualizzazione**, pensati per mostrare l'interfaccia a chi non ha
 ancora un account reale (es. durante una presentazione al direttivo), o per
 verificare rapidamente l'aspetto dei tre ruoli.
+
+Gli account demo esistono **solo nella build statica pubblicata su GitHub
+Pages**. Il server di produzione non li riconosce: nelle altre build la
+modalità demo è disattivata (vedi sotto e `SECURITY.md`).
 
 ### Come funzionano (e perché sono sicuri anche a repository pubblico)
 
@@ -173,8 +197,7 @@ verificare rapidamente l'aspetto dei tre ruoli.
   approvare, rifiutare, inviare PEC, caricare o eliminare allegati,
   modificare la configurazione) viene bloccata prima ancora di provare a
   contattare il server, con un messaggio che lo spiega.
-- **Nessun pulsante le suggerisce**: a differenza di una prima versione di
-  questa schermata, il login **non ha pulsanti "clicca per accedere come
+- **Nessun pulsante le suggerisce**: il login **non ha pulsanti "clicca per accedere come
   admin/volontario"**. Le credenziali vanno scritte a mano. Questo evita che
   chiunque apra la pagina di login veda una scorciatoia immediata, pur
   lasciando l'accesso demo disponibile a chi conosce (o legge in questo
@@ -223,7 +246,7 @@ npm run db:create-admin
 Nonostante il nome, lo script chiede il ruolo e può creare anche un
 referente territoriale o un volontario, non solo un admin. In alternativa,
 un amministratore già loggato può creare nuovi utenti direttamente dal
-pannello di amministrazione dell'app (Configurazione → Utenti), dove i
+pannello di amministrazione dell'app (Amministrazione → Utenti), dove i
 requisiti della password sono mostrati prima dell'invio del modulo.
 
 **Se crei un referente territoriale**, lo script chiede anche la sigla
@@ -235,11 +258,13 @@ aggiungibile dal pannello admin).
 
 ## 6. Configurazione dell'invio PEC
 
-Finché le variabili `PEC_SMTP_*` non sono impostate nel file `.env`,
-l'applicazione resta in **modalità demo per l'invio**: registra un log
-dell'invio ma non spedisce nessuna email reale. Questo è utile per provare
-l'intero flusso (bozza → revisione → approvazione → "invio") senza rischiare
-di mandare PEC vere per errore durante i test.
+Finché `PEC_SMTP_HOST` non è impostata nel file `.env`, la
+richiesta di invio PEC è rifiutata con risposta 503 e lo stato della
+segnalazione non cambia. La funzione "simula spedizione" resta disponibile:
+registra l'anteprima nel log e invia la copia di controllo soltanto quando
+il servizio di posta è configurato. Questo permette di verificare l'intero
+flusso (bozza → revisione → approvazione → invio) senza rischiare di inviare
+PEC reali per errore.
 
 Per abilitare l'invio reale, aggiungi al file `.env`:
 
@@ -251,13 +276,13 @@ PEC_SMTP_PASSWORD=password_applicativa_della_pec
 PEC_FROM=PEC-DA-CONFIGURARE@pec.tuodominio.it
 ```
 
-**Punti da verificare col proprio gestore PEC prima di procedere:**
+**Requisiti da confermare con il proprio gestore PEC prima dell'attivazione:**
 
 1. Che la casella supporti l'**accesso SMTP con credenziali applicative**
    (non solo l'accesso via webmail). Alcuni gestori richiedono di generare
    una password dedicata per l'accesso via client/SMTP, diversa da quella
    della webmail.
-2. Che la casella sia **intestata a CieloBuio** (l'associazione), non al
+2. Che la casella sia **intestata a CieloBuio**, non al
    volontario che sta facendo il deploy: è uno dei vincoli non negoziabili
    del progetto (vedi README, sezione "Vincoli non negoziabili rispettati").
 3. **Vincolo tecnico delle PEC italiane**: i messaggi possono avere
@@ -283,9 +308,9 @@ NEXT_PUBLIC_BASE_URL=https://segnalazioni.esempio.it
 
 Questa variabile non è solo per i link nelle email: **è anche il
 meccanismo di protezione anti-CSRF** dell'applicazione (vedi
-`src/middleware.ts`). Se non è impostata, il controllo dell'header
-`Origin`/`Referer` sulle richieste che modificano dati viene saltato del
-tutto. **Non avviare mai l'applicazione in produzione senza questa
+`src/proxy.ts`). In produzione, se non è impostata, tutte le richieste che modificano
+dati ricevono risposta 503 (configurazione incompleta): il sistema non
+accetta modifiche senza un'origine di riferimento. **Non avviare mai l'applicazione in produzione senza questa
 variabile impostata con il dominio reale.**
 
 ### 7.2 Configurazione PostgreSQL
@@ -294,8 +319,8 @@ Il progetto usa **PostgreSQL 16** come database predefinito. Lo schema
 Prisma è già configurato con `provider = "postgresql"` e la stringa di
 connessione è letta da `DATABASE_URL` nel file `.env`.
 
-PostgreSQL offre ACID compliance, MVCC per concorrenza multi-writer,
-JSONB per dati strutturati e full-text search nativo. È la scelta
+PostgreSQL offre ACID compliance e MVCC per la concorrenza multi-writer.
+È la scelta
 ideale per un sistema multi-utente con transazioni critiche (invio PEC,
 generazione protocolli, audit trail).
 
@@ -320,10 +345,9 @@ Imposta nel `.env` di produzione:
 DATABASE_URL="postgresql://cielobuio:tua-password-sicura@localhost:5432/cielobuio_segnalazioni?schema=public"
 ```
 
-Poi esegui `npm run db:push` (o, meglio in produzione, il flusso di
-migrazioni descritto al punto 8.6).
+Poi applica le migrazioni del database con `npm run db:migrate` (vedi il punto 8.6).
 
-### 7.4 Decidere dove gira il processo Node.js
+### 7.3 Decidere dove gira il processo Node.js
 
 L'applicazione, una volta compilata, è un server Node.js autonomo
 (`output: "standalone"` in `next.config.ts`) che ascolta sulla porta 3000.
@@ -349,7 +373,7 @@ sudo apt update && sudo apt upgrade -y
 ### 8.2 Installa Node.js e Git
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt install -y nodejs git
 ```
 
@@ -375,9 +399,13 @@ cd /opt/cielobuio-segnalazioni
 ### 8.5 Configura le variabili d'ambiente di produzione
 
 ```bash
+umask 077
 cp .env.example .env
+chmod 600 .env
 nano .env
 ```
+
+Non lasciare `.env` leggibile da altri utenti locali: contiene credenziali e chiavi. Il servizio systemd deve poterlo leggere come `www-data`, quindi il cambio di proprietario al punto 8.8 comprende anche questo file.
 
 Imposta almeno:
 
@@ -392,35 +420,33 @@ PEC_FROM=PEC-DA-CONFIGURARE@pec.tuodominio.it
 REMINDER_GIORNI=30
 TRANSIZIONE_INVIATA_GIORNI=7
 
-# Opzionali ma raccomandati in produzione:
+# Sicurezza e backup (METRICS_TOKEN opzionale, BACKUP_ENCRYPTION_KEY obbligatoria):
 # METRICS_TOKEN: token per /api/metrics (Prometheus). Genera con: openssl rand -hex 32
-# BACKUP_ENCRYPTION_KEY: chiave Base64 32 byte per cifrare i backup. Genera con: openssl rand -base64 32
+# BACKUP_ENCRYPTION_KEY: chiave Base64 32 byte, obbligatoria per creare e ripristinare i backup. Genera con: openssl rand -base64 32
 ```
 
 (Sostituisci `segnalazioni.esempio.it` con il dominio reale scelto.)
 
-**Variabili di sicurezza opzionali (raccomandate in produzione)**:
+**Variabili di sicurezza (METRICS_TOKEN raccomandata, BACKUP_ENCRYPTION_KEY obbligatoria)**:
 
 - `METRICS_TOKEN`: token statico per l'endpoint `/api/metrics` (compatibile con Prometheus via `Authorization: Bearer <token>`). Senza questa variabile, l'endpoint richiede il cookie di sessione admin (non compatibile con Prometheus che non può inviare cookie HTTP-only). Genera con `openssl rand -hex 32`.
-- `BACKUP_ENCRYPTION_KEY`: chiave Base64 di 32 byte per cifrare at-rest i backup con AES-256-GCM. Cifra sia i metadati DB JSON sia gli allegati fisici. Genera con `openssl rand -base64 32`. **Conservala in luogo sicuro: senza di essa i backup sono irrecuperabili.**
+- `BACKUP_ENCRYPTION_KEY`: **obbligatoria** per creare e ripristinare i backup. Chiave Base64 di 32 byte: ogni file del backup (tabelle, allegati, metadati) è cifrato con AES-256-GCM. Genera con `openssl rand -base64 32`. Senza questa variabile `npm run db:backup` e `npm run db:restore` terminano senza operare. **Conservala in un gestore di password o KMS separato dal backup: senza di essa i backup sono irrecuperabili.**
 
 ### 8.6 Installa le dipendenze, genera Prisma e prepara il database
 
 ```bash
-npm ci --omit=dev
+npm ci                    # installa anche le devDependencies: servono al build (TypeScript 7, Tailwind)
 npm run db:generate
-npm run db:push
+npm run db:migrate
 npm run db:seed
 npm run db:create-admin
 ```
 
-> Se in futuro modifichi lo schema del database dopo il primo deploy, usa
-> `npm run db:push` per sincronizzare le modifiche dello schema al database.
-> Il progetto non usa una directory `prisma/migrations/`: lo schema iniziale
-> è gestito da `db:push` e i dati di esempio da `npm run db:seed`. Per
-> cambiamenti schema che richiedono data migration strutturata, valutare
-> in futuro l'introduzione di `prisma/migrations/` con `prisma migrate dev`
-> in development e `prisma migrate deploy` in produzione.
+> Lo schema è versionato in `prisma/migrations/`. In produzione le migrazioni
+> si applicano con `npm run db:migrate` (`prisma migrate deploy`), che non
+> genera migrazioni e non cancella dati. Quando modifichi `prisma/schema.prisma`,
+> crea la migrazione in sviluppo con `npm run db:migrate:dev` (`prisma migrate dev`)
+> e committa la cartella generata. I dati di configurazione iniziali si caricano con `npm run db:seed`.
 
 ### 8.7 Compila l'applicazione per la produzione
 
@@ -458,8 +484,8 @@ Environment=PORT=3000
 # BINDING A LOOPBACK: il server Node deve essere raggiungibile SOLO tramite
 # Caddy (reverse proxy), mai direttamente da Internet. Se la porta 3000
 # fosse esposta pubblicamente, un attaccante potrebbe bypassare tutti i
-# controlli di rate limiting (che si basano su X-Forwarded-For impostato
-# da Caddy) e di CSRF (che si basa su Origin verificata).
+# controlli di rate limiting (che si basano su X-Real-IP impostato da
+# Caddy) e di CSRF (che si basa su Origin verificata).
 Environment=HOSTNAME=127.0.0.1
 
 [Install]
@@ -470,6 +496,9 @@ Poi:
 
 ```bash
 sudo chown -R www-data:www-data /opt/cielobuio-segnalazioni
+sudo chmod 600 /opt/cielobuio-segnalazioni/.env
+sudo install -d -o www-data -g www-data -m 0700 /opt/cielobuio-segnalazioni/storage /opt/cielobuio-segnalazioni/storage/uploads /opt/cielobuio-segnalazioni/backups
+sudo chmod -R go-rwx /opt/cielobuio-segnalazioni/storage /opt/cielobuio-segnalazioni/backups
 sudo systemctl daemon-reload
 sudo systemctl enable --now cielobuio-segnalazioni
 sudo systemctl status cielobuio-segnalazioni
@@ -564,16 +593,29 @@ transitano automaticamente di stato e non hai backup):
 crontab -e -u www-data
 ```
 
-Aggiungi:
+Aggiungi il job di manutenzione come utente `www-data`:
 
 ```cron
-# Maintenance giornaliero alle 3:00: transizioni automatiche di stato,
-# pulizia sessioni scadute
+# Alle 3:00: transizioni, sessioni, anonimizzazione GDPR e file orfani
 0 3 * * * cd /opt/cielobuio-segnalazioni && /usr/bin/env npm run cron:reminder >> logs/cron.log 2>&1
-
-# Backup giornaliero alle 2:00: esporta tutte le tabelle in JSON
-0 2 * * * cd /opt/cielobuio-segnalazioni && /usr/bin/env npm run db:backup >> logs/backup.log 2>&1
 ```
+
+Il backup richiede una finestra senza scritture su database e allegati. Lo script `scripts/backup-consistente.sh` ferma il servizio, esegue il backup come `www-data` e riavvia il servizio anche se il backup fallisce. Il suo uso presuppone il servizio systemd e il percorso applicativo indicati al punto 8. Verifica che non siano attivi altri processi che scrivono sui dati.
+
+**Non eseguire come root uno script dalla directory applicativa, che è scrivibile da `www-data`.** Installa una copia non modificabile dall'utente dell'applicazione e crea una directory dei log di proprietà di root. In caso di distribuzione di una versione futura dello script, installa di nuovo la copia:
+
+```bash
+sudo install -o root -g root -m 0755 /opt/cielobuio-segnalazioni/scripts/backup-consistente.sh /usr/local/sbin/cielobuio-backup-consistente
+sudo install -d -o root -g root -m 0750 /var/log/cielobuio
+sudo crontab -e -u root
+```
+
+```cron
+# Alle 2:00: ferma il servizio, salva una copia coerente, riavvia il servizio
+0 2 * * * /usr/local/sbin/cielobuio-backup-consistente >> /var/log/cielobuio/backup.log 2>&1
+```
+
+Non scrivere il log di un job root in una directory scrivibile da `www-data`: un collegamento simbolico creato dall'applicazione potrebbe reindirizzare la scrittura su un altro file del sistema.
 
 Crea la cartella dei log se non esiste:
 
@@ -585,41 +627,78 @@ mkdir -p /opt/cielobuio-segnalazioni/logs
 
 ## 10. Backup
 
-- **Database PostgreSQL**: il job di backup
-  configurato al punto 9 esporta tutte le tabelle in JSON dentro
-  `backups/`, con pulizia automatica dei backup più vecchi di 30 giorni.
-  Per un backup "grezzo" aggiuntivo, puoi anche solo creare un dump del
-  database PostgreSQL con `pg_dump` periodicamente.
-- **Database PostgreSQL** (se scelto): usa `pg_dump` schedulato invece del
-  backup JSON, oppure mantieni entrambi.
-- **Allegati**: lo script di backup copia automaticamente anche i file
-  fisici in `storage/uploads/` dentro la directory di backup, per un
-  ripristino completo in caso di disastro.
-- **Cifratura at-rest (raccomandata in produzione)**: imposta la variabile
+- **Database PostgreSQL**: il job di backup configurato al punto 9 esporta
+  le tabelle in JSON cifrato dentro `backups/`, con pulizia automatica dei
+  backup più vecchi di 30 giorni. Per una copia completa del database si
+  affianca un dump periodico con `pg_dump`, schedulato sul server.
+- **Allegati**: lo script di backup include i file fisici nella directory
+  `STORAGE_ROOT` se configurata, altrimenti in `storage/uploads/`. Un file
+  mancante, illeggibile o non ripristinabile impedisce la pubblicazione di
+  un archivio incompleto. Controlla il codice di uscita e il log del job.
+- **Ambiente**: gli script di seed, creazione utente, manutenzione, backup e
+  ripristino caricano `.env` dalla directory di lavoro. Eseguili dalla
+  directory del progetto, senza inserire credenziali nella riga di comando.
+
+### Ripristino controllato
+
+1. Verifica la chiave `BACKUP_ENCRYPTION_KEY`, il nome del backup e lo spazio
+   disponibile. Conserva una copia separata dello stato corrente. Ferma tutti
+   i processi che scrivono nel database o nello storage, incluso il servizio:
+
+   ```bash
+   sudo systemctl stop cielobuio-segnalazioni
+   cd /opt/cielobuio-segnalazioni
+   sudo -u www-data npm run db:restore -- backup-YYYYMMDD-HHMMSS --force
+   ```
+
+   Ometti `--force` solo se tutte le tabelle di destinazione sono vuote.
+   La procedura verifica metadati, tabelle e allegati prima di sostituire i
+   dati, invalida le sessioni e riallinea recidive e sequenze PostgreSQL.
+2. Controlla database, allegati e log. Se lo script è stato interrotto
+   forzatamente, verifica anche le directory `.cielobuio-restore-*` e
+   `.cielobuio-previous-*` accanto allo storage: file e database non
+   condividono una transazione atomica. Non riavviare l'applicazione prima
+   di aver accertato la coerenza dei due insiemi.
+3. Per un backup che contiene pratiche oltre la retention, esegui il job di
+   anonimizzazione GDPR e controlla i file residui. Riavvia il servizio
+   soltanto dopo la verifica:
+
+   ```bash
+   sudo -u www-data npm run cron:reminder
+   sudo systemctl start cielobuio-segnalazioni
+   ```
+
+Testa la procedura in un ambiente isolato prima dell'uso in produzione.
+- **Cifratura dei backup (obbligatoria)**: imposta la variabile
   d'ambiente `BACKUP_ENCRYPTION_KEY` con una chiave Base64 di 32 byte
-  (generabile con `openssl rand -base64 32`). Quando impostata, lo script
-  di backup cifra SIA i metadati JSON del DB SIA gli allegati fisici con
-  AES-256-GCM (file `.enc`). Senza la chiave, i backup sono in chiaro
-  (sconsigliato in produzione).
+  (generabile con `openssl rand -base64 32`). È obbligatoria: senza di essa
+  lo script di backup termina senza creare file. Ogni file del backup
+  (tabelle JSON, metadati e allegati fisici) è cifrato con AES-256-GCM
+  (file `.enc`).
 - **Responsabilità**: definite chi tra i volontari controlla periodicamente
   che i backup vengano effettivamente generati (es. verifica mensile della
   cartella `backups/` e delle dimensioni dei file).
 
 ---
 
-## 11. Aggiornamento dell'applicazione dopo il primo deploy
+## 11. Manutenzione dell'installazione
 
-Quando ci sono modifiche al codice da pubblicare:
+Il deploy systemd usa una finestra di manutenzione: sospendere i cron e gli altri processi che scrivono nel database o nello storage. Eseguire lo script con l'utente proprietario dell'installazione, che deve poter leggere `.env` e avere permessi sudo non interattivi limitati a `systemctl stop` e `systemctl start` dell'unità applicativa.
 
 ```bash
 cd /opt/cielobuio-segnalazioni
-git pull
-npm ci --omit=dev
-npm run db:generate
-npm run db:push       # sincronizza eventuali modifiche dello schema
-npm run build
-sudo systemctl restart cielobuio-segnalazioni
+bash scripts/deploy.sh production main
 ```
+
+Lo script richiede una directory Git pulita e il ramo già selezionato. Ferma il servizio, esegue il backup cifrato, acquisisce il codice con `git pull --ff-only`, installa le dipendenze, costruisce l'applicazione e applica le migrazioni. Un backup fallito interrompe sempre il deploy. La build precede le migrazioni: un errore di compilazione non applica uno schema nuovo. Il servizio viene avviato anche quando un passaggio fallisce; in tal caso verificare lo stato prima di ripetere il deploy. Non si tratta di un rollback automatico di codice e database.
+
+Per staging usare directory, database, storage, unità systemd e porta distinti dalla produzione. I valori predefiniti dello script sono `/opt/cielobuio-segnalazioni-staging` e `cielobuio-segnalazioni-staging`; l'URL del controllo deve essere esplicito:
+
+```bash
+CIELOBUIO_HEALTH_URL=http://localhost:3001/api/health bash scripts/deploy.sh staging main
+```
+
+`CIELOBUIO_APP_DIR` e `CIELOBUIO_SERVICE` consentono percorsi e unità personalizzati. Il controllo HTTP ha timeout di connessione e risposta e non deve interrogare il servizio di produzione durante un deploy staging.
 
 ---
 
@@ -635,11 +714,12 @@ segue:
   credenziali vere)
 - Il `Caddyfile` di produzione (contiene solo un dominio d'esempio da
   sostituire, nessun segreto)
-- Gli script `seed.ts` e `create-admin.ts` (non contengono credenziali:
-  il primo popola solo dati di configurazione con segnaposto espliciti, il
-  secondo chiede le credenziali a runtime senza scriverle da nessuna parte)
+- Gli script `scripts/seed.ts` e `scripts/create-admin.ts` (non contengono credenziali:
+  il primo popola solo dati di configurazione (regioni, leggi, province,
+  comuni senza sindaco e senza PEC), il secondo chiede le credenziali a
+  runtime senza scriverle da nessuna parte)
 - Le credenziali dei tre account demo (sezione 4): non danno accesso a
-  nulla di reale
+  nulla di reale, e sono accettate solo dalla build GitHub Pages
 
 **Da NON pubblicare mai (già esclusi da `.gitignore`, verificare comunque
 prima di ogni commit):**
@@ -668,25 +748,27 @@ compaia nell'elenco.
 
 - [ ] `NEXT_PUBLIC_BASE_URL` impostata con il dominio reale (sezione 7.1:
       obbligatoria per la protezione anti-CSRF)
-- [ ] Casella PEC configurata, intestata a CieloBuio, testata con un invio
-      di prova ("simula spedizione" dall'app, poi un invio reale di test)
+- [ ] Casella PEC configurata, intestata a CieloBuio, testata con una
+      simulazione ("simula spedizione" dall'app) e con un invio reale di verifica
 - [ ] Almeno un utente amministratore reale creato con `db:create-admin`
-- [ ] Dati di configurazione (comuni, sindaci, PEC) verificati e aggiornati
-      dal pannello di amministrazione — i valori inseriti dal seed sono
-      segnaposto, non dati reali
+- [ ] Dati di configurazione (sindaci, PEC dei comuni) completati e verificati
+      dal pannello di amministrazione: il seed crea i comuni senza sindaco e
+      senza PEC
 - [ ] Servizio systemd attivo e configurato per riavviarsi da solo
       (`Restart=on-failure`) e all'avvio del server (`enable`)
 - [ ] Caddy configurato con il dominio reale, HTTPS verificato nel browser
 - [ ] I due job cron (maintenance e backup) programmati e verificati con
-      un'esecuzione manuale di prova
+      un'esecuzione manuale di verifica
 - [ ] Backup testato: verifica che `npm run db:backup` produca davvero un
       file in `backups/` con contenuto leggibile
 - [ ] Verifica che il file `.env` reale non sia mai stato committato
       (sezione 12)
-- [ ] Provato il login con i tre account demo (sezione 4) per confermare
-      che siano di sola visualizzazione anche in produzione
+- [ ] Verificato che le credenziali dei tre account demo (sezione 4) siano
+      rifiutate dal server di produzione (la modalità demo è attiva solo
+      nella build GitHub Pages)
+- [ ] `https://<dominio>/.well-known/security.txt` risponde e la data `Expires` non è ancora scaduta (vedi README, sezione Manutenzione)
 - [ ] Provato l'intero flusso con un account reale: bozza → invio in
-      revisione → approvazione → "simula spedizione" → invio reale di test
+      revisione → approvazione → "simula spedizione" → invio reale di verifica
       → cambio stato
 
 ---
@@ -702,6 +784,7 @@ include app + PostgreSQL + Caddy (reverse proxy) in un unico stack.
 - Docker 24+ e Docker Compose v2 installati sul server
 - Dominio DNS configurato per puntare al server
 - Porte 80 (HTTP) e 443 (HTTPS) aperte sul firewall
+- Le immagini del `Dockerfile` e di `docker-compose.yml` (`node:24-alpine`, `postgres:16-alpine`, `caddy:2-alpine`) sono fissate a digest `sha256`: la build usa sempre le stesse basi finché il digest non viene aggiornato, e Dependabot propone gli aggiornamenti
 
 ### 14.2. Avvio con Docker Compose
 
@@ -717,8 +800,10 @@ export PEC_SMTP_HOST="smtp.pec.tuodominio.it"
 export PEC_SMTP_USER="PEC-DA-CONFIGURARE@pec.tuodominio.it"
 export PEC_SMTP_PASSWORD="password_applicativa"
 export PEC_FROM="PEC-DA-CONFIGURARE@pec.tuodominio.it"
-# Opzionali ma raccomandati:
+# Raccomandato per il monitoraggio Prometheus:
 export METRICS_TOKEN="$(openssl rand -hex 32)"
+# Obbligatoria per creare e ripristinare i backup: conservala in un gestore
+# di password separato dal server, altrimenti i backup sono irrecuperabili.
 export BACKUP_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 
 # Avvia lo stack
@@ -730,19 +815,23 @@ docker compose ps
 
 ### 14.3. Setup del database in Docker
 
-Il container Docker include `tsx` (runner TypeScript) che permette di
-eseguire gli script di setup senza richiedere `bun`:
+Il container include la CLI Prisma e `tsx` (runner TypeScript), che
+permettono di applicare le migrazioni ed eseguire gli script di setup
+senza richiedere `bun`:
 
 ```bash
+# Applica le migrazioni del database (obbligatorio al primo avvio e dopo ogni aggiornamento)
+docker compose exec app npm run db:migrate
+
 # Popola le tabelle di configurazione (regioni, province, comuni)
 docker compose exec app npm run db:seed
 
 # Crea il primo utente amministratore
 docker compose exec app npm run db:create-admin
 
-# Verifica che l'app risponda (curl interno al container, evita problemi
+# Verifica che l'app risponda (richiesta interna al container, evita problemi
 # di routing DNS del Caddyfile configurato per un dominio specifico)
-docker compose exec app curl -sf http://localhost:3000/api/health
+docker compose exec app node -e "fetch('http://127.0.0.1:3000/api/health').then((r) => console.log(r.status, r.ok ? 'OK' : 'ERRORE'), () => process.exit(1))"
 
 # In alternativa, dall'host con resolve DNS forzato:
 # curl -k --resolve segnalazioni.esempio.it:443:127.0.0.1 https://segnalazioni.esempio.it/api/health
@@ -754,9 +843,9 @@ docker compose exec app curl -sf http://localhost:3000/api/health
 # Backup manuale (cifrato se BACKUP_ENCRYPTION_KEY è impostata)
 docker compose exec app npm run db:backup
 
-# Cron job di maintenance (pulizia sessioni, transizioni, GDPR)
-# Aggiungi al crontab dell'host:
-# 0 3 * * * docker compose -f /path/to/docker-compose.yml exec app npm run cron:reminder
+# Job schedulati da aggiungere al crontab dell'host (-T evita l'uso del terminale):
+# 0 3 * * * docker compose -f /path/to/docker-compose.yml exec -T app npm run cron:reminder
+# 0 2 * * * docker compose -f /path/to/docker-compose.yml exec -T app npm run db:backup
 ```
 
 ### 14.5. Configurazione Caddy
@@ -767,7 +856,7 @@ di default usa `localhost:3000` (deploy bare-metal), in Docker Compose
 viene automaticamente impostato a `app:3000` dal `docker-compose.yml`.
 
 Modifica il dominio nel Caddyfile sostituendo `segnalazioni.esempio.it`
-con il dominio reale dell'associazione:
+con il dominio reale di CieloBuio:
 
 ```Caddyfile
 segnalazioni.esempio.it {
@@ -789,7 +878,7 @@ In Docker Compose non è necessario editare il Caddyfile: la variabile
   proxy Caddy. Questo è diverso dal deploy systemd bare-metal dove serve
   `HOSTNAME=127.0.0.1` direttamente nel processo Node (vedi sezione 8.8),
   perché in quel caso manca l'isolazione della rete Docker.
-- **Bun non richiesto**: il container usa `node:22-alpine` + `tsx` per
+- **Bun non richiesto**: il container usa `node:24-alpine` + `tsx` per
   eseguire gli script TypeScript. Non è necessario installare Bun
   nell'host o nel container.
 - **NEXT_PUBLIC_BASE_URL**: passata come build arg (non solo env runtime)
@@ -798,20 +887,20 @@ In Docker Compose non è necessario editare il Caddyfile: la variabile
   con la env var impostata nel runtime del container.
 - **Persistenza**: i volumi Docker `app-storage`, `backups` e `db-data`
   preservano gli allegati, i backup e il database tra riavvii del container.
-- **Backup cifrati**: imposta `BACKUP_ENCRYPTION_KEY` (Base64 di 32 byte,
-  genera con `openssl rand -base64 32`) per cifrare i backup at-rest con
-  AES-256-GCM. Senza questa variabile, i backup sono in chiaro.
+- **Backup cifrati**: `BACKUP_ENCRYPTION_KEY` (Base64 di 32 byte, genera con
+  `openssl rand -base64 32`) è obbligatoria. Tutti i file dei backup sono
+  cifrati con AES-256-GCM. Senza questa variabile il backup non viene creato.
 
 ---
 
 ## 15. Risoluzione problemi comuni
 
 **"L'installazione delle dipendenze fallisce per conflitti di versione"**
-Assicurati di avere una copia pulita del progetto (senza `node_modules` e
-`package-lock.json` di versioni precedenti) prima di eseguire
-`npm install` da capo.
+Assicurati di partire da una copia pulita del progetto, senza `node_modules`,
+e con il `package-lock.json` del repository non modificato. Poi esegui di nuovo
+`npm install`.
 
-**"`npm run db:push` si blocca o dà errori di rete"**
+**"`npm run db:migrate` si blocca o dà errori di rete"**
 Prisma scarica i propri motori binari da `binaries.prisma.sh` al primo
 utilizzo: verifica che il server abbia accesso a internet in uscita verso
 quel dominio (alcuni firewall aziendali/cloud lo bloccano).
@@ -823,18 +912,21 @@ valore diverso dal dominio reale usato per accedere al sito (deve
 combaciare esattamente, protocollo incluso: `https://`, non `http://`).
 
 **"L'invio PEC non parte, ma non ci sono errori evidenti"**
-Controlla che tutte e cinque le variabili `PEC_SMTP_*`/`PEC_FROM` siano
-impostate: se anche una sola manca, l'app resta in modalità demo (log
-soltanto, nessun invio reale) per evitare invii accidentali con
-configurazione incompleta.
+Controlla che `PEC_SMTP_HOST` sia impostata: senza di essa l'invio PEC
+resta disabilitato (503) per evitare invii accidentali. Controlla anche
+`PEC_SMTP_USER` e `PEC_SMTP_PASSWORD`, di norma necessarie per l'accesso SMTP
+della casella. `PEC_FROM` è obbligatoria per l'invio reale: la lettera riporta la PEC
+dell'associazione e, senza di essa, l'invio viene rifiutato con un messaggio
+esplicito. Senza `PEC_FROM` la simulazione usa la PEC dell'utente come mittente.
 
 **"Un utente resta bloccato dopo alcuni tentativi di login falliti"**
 È il comportamento atteso del rate limiting (sezione Sicurezza del
-README): 3 tentativi falliti bloccano l'accesso per 5 minuti, con
-escalation fino a 24 ore in caso di blocchi ripetuti. Non esiste uno
+README): 3 tentativi falliti per la stessa email, o 20 tentativi dallo
+stesso indirizzo IP, bloccano l'accesso per 5 minuti, con escalation
+fino a 24 ore in caso di blocchi ripetuti. Non esiste uno
 sblocco manuale rapido: basta attendere il tempo indicato, oppure
 riavviare il processo dell'applicazione (il conteggio dei tentativi è
-mantenuto in memoria, non nel database, quindi un riavvio lo azzera — da
+mantenuto in memoria del processo, quindi un riavvio lo azzera. Da
 usare con cautela, solo se davvero necessario).
 
 **"Ho bisogno di aggiungere una nuova regione o correggere una legge"**
@@ -847,3 +939,10 @@ Apri una issue su https://github.com/Ft2801/CieloBuio-Segnalazioni/issues
 descrivendo il problema con il maggior dettaglio possibile (passi per
 riprodurlo, log, versione del software, browser, sistema operativo).
 In alternativa, scrivi a fabiot2801@gmail.com per assistenza diretta.
+
+
+### Database dedicato al collaudo
+
+La suite `npm run test:integration` richiede PostgreSQL con migrazioni applicate e un database sacrificabile chiamato `cielobuio_integration`. Usare un ruolo dedicato, privo di permessi sui database operativi. Impostare `TEST_DATABASE_URL` sulla sua connessione, eseguire `DATABASE_URL="$TEST_DATABASE_URL" npm run db:migrate`, quindi `npm run test:integration`. La suite elimina tutti i dati applicativi nel database di collaudo e usa cartelle temporanee per allegati e backup. La configurazione non ricava la connessione implicitamente da `DATABASE_URL` e rifiuta nomi database differenti. I casi coprono flussi concorrenti, rollback, allegati, TOTP, sessioni e ripristino; i dettagli operativi sono nella sezione di collaudo del README.
+
+Lo storage degli allegati è privato e non ammette collegamenti simbolici nella radice, nelle cartelle delle pratiche o nei file serviti da download e anteprima. La directory deve essere scrivibile soltanto dall'account applicativo e dagli amministratori fidati del sistema.

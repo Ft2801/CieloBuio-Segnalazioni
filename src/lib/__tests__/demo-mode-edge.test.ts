@@ -1,10 +1,10 @@
 /**
  * Test per i rami residui di demo-mode.ts:
- * - getActiveDemoSession: catch (linea 149), parsed not isDemo (linea 148)
- * - activateDemoSession: catch su sessionStorage.setItem non disponibile
- * - clearDemoSession: catch su sessionStorage.removeItem non disponibile
+ * - getActiveDemoSession: valori non JSON, non oggetto o senza isDemo
+ * - activateDemoSession: errore di sessionStorage.setItem gestito
+ * - clearDemoSession: errore di sessionStorage.removeItem gestito
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   DEMO_ACCOUNTS,
   activateDemoSession,

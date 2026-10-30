@@ -5,19 +5,20 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// La URL di connessione è in prisma.config.ts (Prisma 7). Il client runtime
+// riceve la stessa URL tramite l'adapter @prisma/adapter-pg (vedi src/lib/prisma-client.ts).
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 // ---------------------------------------------------------------------------
-// Tabelle di configurazione (editabili da amministratore, vedi sezione 8 specifiche)
+// Tabelle di configurazione (editabili da amministratore)
 // ---------------------------------------------------------------------------
 
 model RegioneLegge {
   id                         Int      @id @default(autoincrement())
   regione                    String   @unique // Es. "LOMBARDIA", "TRENTINO", "ALTO ADIGE", "VALLE D'AOSTA"
-  riferimentoLegge           String   // Es. "Legge Regionale della Lombardia n.31/15 (e L.R.17/00)"
+  riferimentoLegge           String   // Es. "Legge Regionale della Lombardia n.31/2015 (art. 11, comma 2: disposizioni transitorie della L.R. 17/2000)"
   titoloLegge                String   // Titolo esteso tra virgolette nella lettera
   testoProgettoIlluminotecnico String  // Articolo obbligo progetto
   testoDeroghe               String   // Articolo deroghe modeste entità
@@ -49,6 +50,7 @@ model Provincia {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
+  @@unique([id, regioneId])
   @@map("province")
   @@index([regioneId])
 }
@@ -58,7 +60,7 @@ model Comune {
   nome              String   // Es. "Verdello"
   provinciaId       Int
   provincia         Provincia @relation(fields: [provinciaId], references: [id])
-  cap               String   // Es. "24040"
+  cap               String   // Es. "24049"
   pecComune         String   // Indirizzo PEC del Comune
   nomeSindaco       String?  // Es. "Nome Cognome" - da verificare periodicamente
   noteAggiornamento String?  // Tracciatura ultima verifica
@@ -69,12 +71,13 @@ model Comune {
   // Vincolo di unicità: previene duplicati reali (stesso nome comune nella
   // stessa provincia). I comuni omonimi in province diverse restano ammessi.
   @@unique([nome, provinciaId])
+  @@unique([id, provinciaId])
   @@map("comuni")
   @@index([provinciaId])
 }
 
 // ---------------------------------------------------------------------------
-// Utenti e ruoli (sezione 6 specifiche)
+// Utenti e ruoli
 // ---------------------------------------------------------------------------
 
 model User {
@@ -85,29 +88,23 @@ model User {
   ruolo             String   @default("volontario") // volontario | referente_provinciale | referente_regionale | admin
   provinciaId       Int?     // Per referenti provinciali
   regioneId         Int?     // Per referenti regionali
-  // Dati segnalatore (corrisponde al foglio SETUP del sistema Excel)
+  // Dati del segnalatore
   indirizzo         String?
   pec               String?
   emailOrdinaria    String?
   firma             String?
-  // TOTP secret per autenticazione a due fattori (Base32).
-  // Null se 2FA non è abilitato per questo utente.
-  // totpSecret è presente appena l'utente avvia il setup (action: "setup"
-  // su /api/auth/2fa), MA il 2FA è effettivamente richiesto al login solo
-  // dopo che totpVerifiedAt è valorizzato (action: "verify" completata
-  // con successo). Questo previene il lockout se l'utente avvia il setup
-  // senza completare la verifica (es. chiude la pagina prima di scansionare
-  // il QR code). Per disabilitare il 2FA, sia totpSecret che totpVerifiedAt
-  // vengono azzerati (action: "disable").
+  // Secret TOTP attivo (Base32). Nel primo setup è presente ma non diventa
+  // obbligatorio al login finché totpVerifiedAt è null. Durante la rotazione
+  // il secret già verificato resta attivo fino alla verifica del nuovo.
   totpSecret        String?
-  // Data di conferma del setup TOTP: null finché l'utente non ha verificato
-  // con successo il primo codice TOTP. Il login richiede il 2FA solo se
-  // ENTRAMBI totpSecret e totpVerifiedAt sono valorizzati.
+  // Nuovo secret in attesa di verifica durante la rotazione. Non è mai
+  // accettato al login. Un setup abbandonato non disattiva il vecchio 2FA.
+  totpPendingSecret String?
+  // Il login richiede il 2FA solo se totpSecret e totpVerifiedAt sono presenti.
   totpVerifiedAt    DateTime?
-  // Ultimo timestep TOTP usato con successo per il login (anti-replay,
-  // RFC 6238 §5.2). Aggiornato a ogni login 2FA riuscito. Un nuovo
-  // tentativo con timestep <= questo valore viene rifiutato, impedendo
-  // il riuso dello stesso codice entro la finestra di validità.
+  // Ultimo timestep accettato del secret attivo (anti-replay RFC 6238 §5.2).
+  // Durante la rotazione viene impostato sul codice del nuovo secret usato
+  // per verificarlo, così non può essere riutilizzato al primo login.
   totpLastUsedTimestep Int?
   inizialiProtocollo String? // Es. "DB" - usate nel numero di protocollo
   attivo            Boolean  @default(true)
@@ -117,6 +114,7 @@ model User {
   segnalazioniApprovate Segnalazione[] @relation("ReferenteApprovatore")
   storicoStati      StoricoStato[]
   sessioni          Sessione[]
+  auditLog          AuditLog[]
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -133,7 +131,7 @@ model Sessione {
   id           String   @id @default(cuid())
   userId       String
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  token        String   @unique
+  token        String   @unique // SHA-256 del token di sessione: il token in chiaro sta solo nel cookie
   createdAt    DateTime @default(now())
   scadenza     DateTime
 
@@ -143,7 +141,7 @@ model Sessione {
 }
 
 // ---------------------------------------------------------------------------
-// Tabelle applicative (sezione 9 specifiche)
+// Tabelle applicative
 // ---------------------------------------------------------------------------
 
 model Segnalazione {
@@ -164,21 +162,21 @@ model Segnalazione {
   // Luogo
   indirizzoVia              String
   comuneId                  Int?
-  comune                    Comune?  @relation(fields: [comuneId], references: [id])
+  comune                    Comune?  @relation(fields: [comuneId, provinciaId], references: [id, provinciaId], onDelete: Restrict, onUpdate: Restrict)
   // cap nullable per supportare l'anonimizzazione GDPR dopo
   // RETENTION_SEGNALAZIONI_ANNI: il CAP viene azzerato insieme agli
   // altri PII (indirizzo, coordinate) per evitare che in comuni piccoli
   // con pochi CAP il residuo possa restringere l'area geografica.
   cap                       String?
   provinciaId               Int?
-  provincia                 Provincia? @relation(fields: [provinciaId], references: [id])
+  provincia                 Provincia? @relation(fields: [provinciaId, regioneId], references: [id, regioneId], onDelete: Restrict, onUpdate: Restrict)
   regioneId                 Int?
   regione                   RegioneLegge? @relation(fields: [regioneId], references: [id])
   latitudine                Float?
   longitudine               Float?
   nomeEsercizio             String?  // Nome esercizio commerciale, opzionale
 
-  // Tipologia non conformità (checkbox ereditati dal sistema Excel)
+  // Tipologia di non conformità (checkbox)
   chkVetroPianoInclinato    Boolean  @default(false)
   chkVetroCurvo             Boolean  @default(false)
   chkAltroTipologia         Boolean  @default(false)
@@ -191,7 +189,7 @@ model Segnalazione {
   chkAltroProblema          Boolean  @default(false)
   notaAltroProblema         String?
 
-  descrizioneLibera         String?  // Content Control INTEGRAZIONEPEC del template Word
+  descrizioneLibera         String?  // Testo libero incluso nella lettera PEC
 
   // Destinatari
   destinatarioNome          String?  // Es. "Sindaco Nome Cognome"
@@ -213,12 +211,10 @@ model Segnalazione {
   dataChiusura              DateTime?
 
   // Recidiva
-  // segnalazionePrecedenteId è una vera relazione Prisma (foreign key)
-  // verso la stessa tabella Segnalazione, con onDelete: SetNull per
-  // preservare l'integrità: se la segnalazione precedente viene eliminata
-  // (le bozze sono eliminabili), il riferimento diventa null invece di
-  // restare pendente (dangling reference) come avveniva quando era un
-  // semplice String? senza vincolo.
+  // segnalazionePrecedenteId è una relazione Prisma (foreign key) verso la
+  // stessa tabella Segnalazione, con onDelete: SetNull: se la segnalazione
+  // precedente viene eliminata (le bozze sono eliminabili), il riferimento
+  // diventa null e non resta pendente.
   segnalazionePrecedenteId  String?
   segnalazionePrecedente    Segnalazione? @relation("SegnalazioneRecidiva", fields: [segnalazionePrecedenteId], references: [id], onDelete: SetNull)
   segnalazioniRecidive      Segnalazione[] @relation("SegnalazioneRecidiva")
@@ -227,6 +223,11 @@ model Segnalazione {
   allegati                  Allegato[]
   storicoStati              StoricoStato[]
   logInviiPec               LogInvioPec[]
+  // Lease dell'invio PEC, persistito nel database (valido con più istanze).
+  // Il token identifica il processo che detiene il lock; un lock più vecchio
+  // di PEC_LOCK_TTL_MS è considerato orfano (crash) e può essere riacquisito.
+  invioPecLockToken         String?
+  invioPecLockAt            DateTime?
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 
@@ -247,7 +248,7 @@ model Allegato {
   id             String   @id @default(cuid())
   segnalazioneId String
   segnalazione   Segnalazione @relation(fields: [segnalazioneId], references: [id], onDelete: Cascade)
-  tipo           String   // foto | documento | lettera_pdf | lettera_docx
+  tipo           String   // foto | documento
   urlStorage     String   // Identificatore logico <segnalazioneId>/<filename>; il file reale è in storage/uploads/ (PRIVATA, fuori da public/)
   nomeOriginale  String
   createdAt      DateTime @default(now())
@@ -288,10 +289,10 @@ model LogInvioPec {
   // segnalazione viene eliminata (le bozze sono eliminabili), i log PEC
   // associati vengono rimossi automaticamente.
   segnalazione   Segnalazione @relation(fields: [segnalazioneId], references: [id], onDelete: Cascade)
-  tipo           String   // simula | reale | demo
+  tipo           String   // simula | reale
   destinatari    String   // Elenco separato da ;
   oggetto        String
-  esito          String   // ok | errore
+  esito          String   // simulazione: ok | errore; invio reale: in_corso | incerto | ok | non_inviata (solo verifica manuale)
   messaggioErrore String?
   timestamp      DateTime @default(now())
 
@@ -299,4 +300,18 @@ model LogInvioPec {
   @@index([segnalazioneId])
   @@index([timestamp])
   @@index([esito])
+}
+
+// Registro delle azioni sensibili non legate a una singola segnalazione
+// (es. export CSV). Il riferimento all'utente è nullable per preservare il
+// registro se l'utente viene eliminato.
+model AuditLog {
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  azione    String
+  dettagli  String?
+
+  @@index([azione, timestamp])
 }

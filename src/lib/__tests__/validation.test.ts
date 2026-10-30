@@ -70,6 +70,12 @@ describe("strongPasswordSchema", () => {
   it("accetta 2 caratteri consecutivi uguali", () => {
     expect(strongPasswordSchema.safeParse("AAbcdef1!xyz").success).toBe(true);
   });
+  it("rifiuta password che superano 72 byte (limite bcrypt), anche con meno di 128 caratteri", () => {
+    // Caratteri alternati "è" e "ö" (2 byte ciascuno) evitano la regola dei tre caratteri uguali.
+    // 8 + 33 caratteri = 41 caratteri ma 74 byte; 8 + 32 caratteri = 40 caratteri e 72 byte.
+    expect(strongPasswordSchema.safeParse("Abcdef1!" + "èö".repeat(16) + "è").success).toBe(false);
+    expect(strongPasswordSchema.safeParse("Abcdef1!" + "èö".repeat(16)).success).toBe(true);
+  });
   it("rifiuta password troppo lunghe (> 128)", () => {
     const lunga = "Abcdef1!" + "x".repeat(121);
     expect(strongPasswordSchema.safeParse(lunga).success).toBe(false);
@@ -197,7 +203,7 @@ describe("nuovoComuneSchema", () => {
   const valido = {
     nome: "Verdello",
     provinciaId: 1,
-    cap: "24040",
+    cap: "24049",
     pecComune: "protocollo@pec.it",
   };
   it("accetta comune valido", () => {
@@ -218,7 +224,9 @@ describe("nuovoComuneSchema", () => {
     expect(nuovoComuneSchema.safeParse({ ...valido, provinciaId: 0 }).success).toBe(false);
   });
   it("accetta nomeSindaco e noteAggiornamento opzionali", () => {
-    expect(nuovoComuneSchema.safeParse({ ...valido, nomeSindaco: "Mario Rossi", noteAggiornamento: "2026-01-15" }).success).toBe(true);
+    expect(
+      nuovoComuneSchema.safeParse({ ...valido, nomeSindaco: "Mario Rossi", noteAggiornamento: "2026-01-15" }).success,
+    ).toBe(true);
     expect(nuovoComuneSchema.safeParse({ ...valido, nomeSindaco: null, noteAggiornamento: null }).success).toBe(true);
   });
   it("rifiuta nomeSindaco con CRLF", () => {
@@ -234,20 +242,24 @@ describe("segnalazionePecSchema", () => {
     expect(segnalazionePecSchema.safeParse({ destinatarioNome: "Sindaco\r\nX-Header: injected" }).success).toBe(false);
   });
   it("accetta campi validi", () => {
-    expect(segnalazionePecSchema.safeParse({
-      oggettoPec: "Segnalazione impianto non conforme",
-      destinatarioNome: "Sindaco Mario Rossi",
-      testoIntroduttivoPec: "Si segnala...",
-    }).success).toBe(true);
+    expect(
+      segnalazionePecSchema.safeParse({
+        oggettoPec: "Segnalazione impianto non conforme",
+        destinatarioNome: "Sindaco Mario Rossi",
+        testoIntroduttivoPec: "Si segnala...",
+      }).success,
+    ).toBe(true);
   });
   it("accetta tutti i campi null/undefined", () => {
     expect(segnalazionePecSchema.safeParse({}).success).toBe(true);
-    expect(segnalazionePecSchema.safeParse({
-      oggettoPec: null,
-      testoIntroduttivoPec: null,
-      pecCcAggiuntive: null,
-      destinatarioNome: null,
-    }).success).toBe(true);
+    expect(
+      segnalazionePecSchema.safeParse({
+        oggettoPec: null,
+        testoIntroduttivoPec: null,
+        pecCcAggiuntive: null,
+        destinatarioNome: null,
+      }).success,
+    ).toBe(true);
   });
   it("rifiuta oggetto troppo lungo (> 200)", () => {
     expect(segnalazionePecSchema.safeParse({ oggettoPec: "a".repeat(201) }).success).toBe(false);
@@ -267,7 +279,7 @@ describe("validaPecCcAggiuntive", () => {
     expect(validaPecCcAggiuntive(null).ok).toBe(true);
     expect(validaPecCcAggiuntive(undefined).ok).toBe(true);
   });
-  it("accetta fino a 5 email valide", () => {
+  it("accetta tre email valide", () => {
     const result = validaPecCcAggiuntive("a@b.it; c@d.it; e@f.it");
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.emails).toHaveLength(3);
@@ -302,11 +314,11 @@ describe("validate (helper generico)", () => {
   it("ritorna error con dati non validi", () => {
     const result = validate(emailSchema, "not-email");
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toBeTruthy();
+    if (!result.success) expect(result.error).toBe("Formato email non valido");
   });
   it("ritorna error con messaggio della prima issue", () => {
     const result = validate(strongPasswordSchema, "weak");
     expect(result.success).toBe(false);
-    if (!result.success) expect(result.error).toBeTruthy();
+    if (!result.success) expect(result.error).toBe("La password deve avere almeno 12 caratteri");
   });
 });

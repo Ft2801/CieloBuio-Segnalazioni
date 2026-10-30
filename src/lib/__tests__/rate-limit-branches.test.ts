@@ -47,14 +47,16 @@ describe("cleanup - rami completi con fake timers", () => {
     vi.useRealTimers();
   });
 
-  it("skip se cleanup recente (< 15 min)", () => {
+  it("cleanup richiamato entro 15 min dall'ultimo non rimuove i blocchi ancora attivi", () => {
+    // Con un intervallo recente il cleanup esce subito: un blocco attivo deve restare tale.
+    // (Un'entry eleggibile alla rimozione non può esistere in quella finestra, quindi
+    // l'effetto osservabile del salto è questo.)
     const baseTime = Date.now();
     vi.setSystemTime(baseTime);
-    // Crea un'entry
-    checkRateLimit("key-recent", 3);
-    // Avanza di 5 minuti (< 15 min CLEANUP_INTERVAL_MS)
+    for (let i = 0; i < 4; i++) checkRateLimit("key-recent", 3, 60000, 60 * 60 * 1000, 60 * 60 * 1000);
     vi.setSystemTime(baseTime + 5 * 60 * 1000);
-    expect(() => cleanup()).not.toThrow();
+    cleanup();
+    expect(checkRateLimit("key-recent", 3, 60000, 60 * 60 * 1000, 60 * 60 * 1000).allowed).toBe(false);
   });
 
   it("elimina entry con lock scaduto + lastBlock > 1h", () => {
@@ -108,6 +110,35 @@ describe("cleanup - rami completi con fake timers", () => {
     // L'entry dovrebbe essere ancora bloccata (lock non scaduto)
     const result = checkRateLimit("key-active-lock", 3, 60000, 60 * 60 * 1000, 60 * 60 * 1000);
     expect(result.allowed).toBe(false);
+  });
+});
+
+describe("rate-limit - scadenza esatta del blocco", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __resetRateLimitStoreForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("nega un millisecondo prima e riapre al millisecondo di scadenza", () => {
+    const key = "scadenza-esatta";
+    const lockMs = 60_000;
+    const inizio = Date.now();
+    for (let i = 0; i < 4; i++) checkRateLimit(key, 3, 15 * 60_000, 60 * 60_000, lockMs);
+
+    vi.setSystemTime(inizio + lockMs - 1);
+    const prima = checkRateLimit(key, 3, 15 * 60_000, 60 * 60_000, lockMs);
+    expect(prima.allowed).toBe(false);
+    expect(prima.retryAfterSeconds).toBe(1);
+
+    vi.setSystemTime(inizio + lockMs);
+    const dopo = checkRateLimit(key, 3, 15 * 60_000, 60 * 60_000, lockMs);
+    expect(dopo.allowed).toBe(true);
+    expect(dopo.remaining).toBe(2);
+    expect(dopo.blockCount).toBe(1);
   });
 });
 

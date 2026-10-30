@@ -1,2 +1,19 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalizzazione dei fine riga: LF nel repository e nel checkout, su qualunque sistema
+* text=auto eol=lf
+
+# File che devono avere fine riga LF per funzionare (shell, container, proxy, CI)
+*.sh text eol=lf
+Caddyfile text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# File binari: nessuna conversione e nessun diff testuale
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

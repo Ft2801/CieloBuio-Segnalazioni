@@ -49,33 +49,35 @@ const REGIONE_PROTOCOLLO: Record<string, string> = {
   "FRIULI VENEZIA GIULIA": "FVG",
 };
 
+/**
+ * Errore di generazione del numero di protocollo. Il messaggio è destinato
+ * all'amministratore: indica quale dato correggere prima dell'invio.
+ */
+export class ErroreProtocollo extends Error {
+  constructor(messaggio: string) {
+    super(messaggio);
+    this.name = "ErroreProtocollo";
+  }
+}
+
+/**
+ * Codice a 3 lettere della regione nel numero di protocollo. Una regione
+ * mancante o non presente in REGIONE_PROTOCOLLO blocca la generazione: un
+ * protocollo con codice inventato sarebbe errato nel documento inviato alla PA.
+ */
 export function getRegioneCodice(regione: string): string {
-  // Normalizza: prova prima la chiave diretta, poi con underscore/trattino
-  // convertiti in spazi, per gestire qualsiasi convenzione salvata nel DB.
   const normalized = regione.trim().toUpperCase();
   if (!normalized) {
-    // Regione vuota: logga e ritorna un placeholder esplicito, evitando
-    // di produrre un numero di protocollo con doppi trattini.
-    logger.error({ regione }, "[protocollo] Regione vuota passata a getRegioneCodice");
-    return "XXX";
+    throw new ErroreProtocollo("Regione non assegnata alla provincia: impossibile generare il numero di protocollo.");
   }
-  if (REGIONE_PROTOCOLLO[normalized]) return REGIONE_PROTOCOLLO[normalized];
   const withSpaces = normalized.replace(/[_-]/g, " ");
-  if (REGIONE_PROTOCOLLO[withSpaces]) return REGIONE_PROTOCOLLO[withSpaces];
-  // Fallback: prime 3 lettere. Questo caso si verifica quando l'admin
-  // inserisce una regione non presente nella mappa REGIONE_PROTOCOLLO
-  // (es. refuso, regione nuova non ancora mappata). Il numero di
-  // protocollo verrà generato con un codice potenzialmente ambiguo,
-  // quindi emettiamo un warning strutturato nel log del server per
-  // permettere all'admin di correggere il dato o aggiornare la mappa.
-  const fallback = normalized.slice(0, 3).toUpperCase();
-  logger.warn(
-    { regione, fallback },
-    "[protocollo] Regione non mappata in REGIONE_PROTOCOLLO. " +
-      "Uso del fallback per il numero di protocollo. " +
-      "Verificare il dato nel pannello admin o aggiornare la mappa in src/lib/protocollo.ts."
-  );
-  return fallback;
+  const codice = REGIONE_PROTOCOLLO[normalized] ?? REGIONE_PROTOCOLLO[withSpaces];
+  if (!codice) {
+    throw new ErroreProtocollo(
+      `Regione "${regione}" non riconosciuta per il numero di protocollo: correggere il nome della regione nel pannello di amministrazione.`,
+    );
+  }
+  return codice;
 }
 
 function pad2(n: number): string {
@@ -92,43 +94,90 @@ export { pad2 };
  *
  * Lo slicing è code-point-safe: usa `[...str]` per iterare per code point
  * Unicode invece che per code unit UTF-16, gestendo correttamente
- * caratteri multibyte (emoji, caratteri outside BMP).
+ * caratteri multibyte (emoji, caratteri fuori dal Basic Multilingual Plane).
  */
-export function getInizialiSegnalatore(
-  nomeCognome: string,
-  inizialiProtocollo?: string | null
-): string {
+export function getInizialiSegnalatore(nomeCognome: string, inizialiProtocollo?: string | null): string {
   if (inizialiProtocollo && inizialiProtocollo.length >= 2) {
     return inizialiProtocollo.slice(0, 2).toUpperCase();
   }
-  const parts = nomeCognome.trim().split(/\s+/).filter((p) => p.length > 0);
+  const parts = nomeCognome
+    .trim()
+    .split(/\s+/)
+    .filter((p) => p.length > 0);
   if (parts.length >= 2) {
-    const a = [...parts[0]][0];
-    const b = [...parts[1]][0];
-    if (a && b) return (a + b).toUpperCase();
+    // Ogni parte è non vuota (filtro sopra): il primo code point esiste sempre.
+    return (primoCodePoint(parts[0]) + primoCodePoint(parts[1])).toUpperCase();
   }
   if (parts.length === 1) {
+    // Una sola parola: primi due code point, oppure "X" come seconda
+    // lettera quando la parola è di un solo carattere.
     const chars = [...parts[0]];
-    if (chars.length >= 2) return (chars[0] + chars[1]).toUpperCase();
-    if (chars.length === 1) return (chars[0] + "X").toUpperCase();
+    const seconda = chars.length >= 2 ? chars[1] : "X";
+    return (chars[0] + seconda).toUpperCase();
   }
-  // Fallback per input malformati (stringa vuota, singolo carattere,
-  // o solo whitespace): ritorna un placeholder fisso.
+  // Fallback per input malformati (stringa vuota o solo whitespace):
+  // ritorna un placeholder fisso.
   return "XX";
 }
 
+/** Primo code point di una stringa non vuota (code-point-safe). */
+function primoCodePoint(s: string): string {
+  return [...s][0];
+}
+
+/** Fuso orario di riferimento per la data e il conteggio dei protocolli. */
+const FUSO_PROTOCOLLO = "Europe/Rome";
+
+const formatoDataRoma = new Intl.DateTimeFormat("en-GB", {
+  timeZone: FUSO_PROTOCOLLO,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
 /**
- * Calcola l'inizio e la fine (esclusiva) della giornata locale per la
- * data passata. Usiamo un bound superiore esclusivo (mezzanotte del
- * giorno successivo) per includere correttamente eventuali record con
- * timestamp sub-secondo tra 23:59:59.000 e 23:59:59.999.
+ * Scompone un istante nei componenti di calendario del fuso Europe/Rome,
+ * indipendentemente dal fuso del server (in Docker il server è spesso in UTC).
+ */
+function partiDataRoma(data: Date): { yyyy: number; mese: number; giorno: number } {
+  const parti: Record<string, number> = {};
+  for (const p of formatoDataRoma.formatToParts(data)) {
+    if (p.type !== "literal") parti[p.type] = Number(p.value);
+  }
+  return { yyyy: parti.year, mese: parti.month, giorno: parti.day };
+}
+
+/** Offset in millisecondi di Europe/Rome rispetto a UTC per l'istante dato. */
+function offsetRomaMs(istante: number): number {
+  const d = new Date(istante);
+  const parti = formatoDataRoma.formatToParts(d);
+  const v: Record<string, number> = {};
+  for (const p of parti) if (p.type !== "literal") v[p.type] = Number(p.value);
+  const comeUtc = Date.UTC(v.year, v.month - 1, v.day, v.hour, v.minute, v.second);
+  return comeUtc - Math.floor(istante / 1000) * 1000;
+}
+
+/** Istante UTC della mezzanotte di Europe/Rome per la data (anno, mese 1-12, giorno). */
+function mezzanotteRoma(yyyy: number, mese: number, giorno: number): Date {
+  const comeUtc = Date.UTC(yyyy, mese - 1, giorno);
+  // Due passi: il secondo corregge l'offset quando la data cade a cavallo di un cambio ora.
+  const primo = comeUtc - offsetRomaMs(comeUtc);
+  return new Date(comeUtc - offsetRomaMs(primo));
+}
+
+/**
+ * Calcola l'inizio e la fine (esclusiva) della giornata nel fuso Europe/Rome
+ * per la data passata. Il bound superiore esclusivo (mezzanotte del giorno
+ * successivo) include anche i record con timestamp sub-secondo.
  */
 function getGiornataBounds(data: Date): { inizioGiornata: Date; fineGiornataEsclusiva: Date } {
-  const yyyy = data.getFullYear();
-  const month = data.getMonth();
-  const day = data.getDate();
-  const inizioGiornata = new Date(yyyy, month, day, 0, 0, 0, 0);
-  const fineGiornataEsclusiva = new Date(yyyy, month, day + 1, 0, 0, 0, 0);
+  const { yyyy, mese, giorno } = partiDataRoma(data);
+  const inizioGiornata = mezzanotteRoma(yyyy, mese, giorno);
+  const fineGiornataEsclusiva = mezzanotteRoma(yyyy, mese, giorno + 1);
   return { inizioGiornata, fineGiornataEsclusiva };
 }
 
@@ -151,17 +200,11 @@ export async function calcolaProtocolloPrevisionale(params: {
   segnalatoreNomeCognome: string;
   inizialiProtocollo?: string | null;
 }): Promise<string | null> {
-  const {
-    data,
-    regione,
-    provinciaSigla,
-    segnalatoreNomeCognome,
-    inizialiProtocollo,
-  } = params;
+  const { data, regione, provinciaSigla, segnalatoreNomeCognome, inizialiProtocollo } = params;
 
-  const yyyy = data.getFullYear();
-  const mm = pad2(data.getMonth() + 1);
-  const gg = pad2(data.getDate());
+  const { yyyy, mese, giorno } = partiDataRoma(data);
+  const mm = pad2(mese);
+  const gg = pad2(giorno);
   const reg = getRegioneCodice(regione);
   const pv = provinciaSigla.toUpperCase();
   const nc = getInizialiSegnalatore(segnalatoreNomeCognome, inizialiProtocollo);
@@ -184,11 +227,11 @@ export async function calcolaProtocolloPrevisionale(params: {
 }
 
 /**
- * Genera il numero di protocollo in modo atomico.
+ * Genera il numero di protocollo univoco.
  *
  * Il count delle segnalazioni con protocollo già assegnato nella giornata
- * NON è atomico rispetto a un secondo processo concorrente (PostgreSQL non
- * supporta SELECT FOR UPDATE in modo diretto su count). La protezione
+ * NON è atomico rispetto a un secondo processo concorrente: un risultato di
+ * count non può essere bloccato con SELECT FOR UPDATE. La protezione
  * contro le race condition si affida al vincolo unique su numeroProtocollo
  * (P2002): se due richieste concorrenti calcolano lo stesso progressivo,
  * la seconda fallisce con P2002 e viene ritentata con progressivo+1,
@@ -212,18 +255,11 @@ export async function generaNumeroProtocollo(params: {
   inizialiProtocollo?: string | null;
   segnalazioneId: string;
 }): Promise<string> {
-  const {
-    data,
-    regione,
-    provinciaSigla,
-    segnalatoreNomeCognome,
-    inizialiProtocollo,
-    segnalazioneId,
-  } = params;
+  const { data, regione, provinciaSigla, segnalatoreNomeCognome, inizialiProtocollo, segnalazioneId } = params;
 
-  const yyyy = data.getFullYear();
-  const mm = pad2(data.getMonth() + 1);
-  const gg = pad2(data.getDate());
+  const { yyyy, mese, giorno } = partiDataRoma(data);
+  const mm = pad2(mese);
+  const gg = pad2(giorno);
   const reg = getRegioneCodice(regione);
   const pv = provinciaSigla.toUpperCase();
   const nc = getInizialiSegnalatore(segnalatoreNomeCognome, inizialiProtocollo);
@@ -242,11 +278,11 @@ export async function generaNumeroProtocollo(params: {
     },
   });
 
-  // Tenta fino a 10 volte per gestire collisioni sul unique.
+  // Tenta fino a 10 volte per gestire le collisioni sul vincolo unique.
   // Il vincolo unique su numeroProtocollo garantisce che al massimo una
   // richiesta riesce per ogni progressivo: la seconda fallisce con P2002
   // e ritenta col progressivo successivo. Se countBase + tentativo
-  // supera 99, estendiamo a 3+ cifre (NCXXX) per gestire volumi
+  // supera 99, il progressivo cresce a 3 o più cifre (es. 100) per gestire volumi
   // giornalieri molto alti per un singolo utente (caso estremo).
   for (let tentativo = 0; tentativo < 10; tentativo++) {
     const progressivo = countBase + 1 + tentativo;
@@ -279,7 +315,7 @@ export async function generaNumeroProtocollo(params: {
       if (existing?.numeroProtocollo) {
         logger.warn(
           { segnalazioneId, existing: existing.numeroProtocollo, candidato },
-          "[protocollo] Segnalazione aveva già un numero di protocollo assegnato, restituito quello esistente"
+          "[protocollo] Segnalazione aveva già un numero di protocollo assegnato, restituito quello esistente",
         );
         return existing.numeroProtocollo;
       }
@@ -287,17 +323,12 @@ export async function generaNumeroProtocollo(params: {
       // assegnare il protocollo. Esci con errore.
       throw new Error(`Segnalazione ${segnalazioneId} non trovata durante assegnazione protocollo`);
     } catch (e) {
-      if (
-        e instanceof Prisma.PrismaClientKnownRequestError &&
-        e.code === "P2002"
-      ) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
         // Collisione: riprova con il prossimo progressivo
         continue;
       }
       throw e;
     }
   }
-  throw new Error(
-    "Impossibile generare un numero di protocollo univoco dopo 10 tentativi"
-  );
+  throw new Error("Impossibile generare un numero di protocollo univoco dopo 10 tentativi");
 }

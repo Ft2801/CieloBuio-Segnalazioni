@@ -88,11 +88,12 @@ describe("calcolaProtocolloPrevisionale", () => {
 describe("generaNumeroProtocollo", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Nessuna segnalazione odierna: il progressivo parte da 01 senza dipendere dai test precedenti.
+    vi.mocked(db.segnalazione.count).mockResolvedValue(0);
   });
 
   it("genera e persiste il protocollo con successo", async () => {
-    vi.mocked(db.$transaction).mockResolvedValue(0);
-    vi.mocked(db.segnalazione.updateMany).mockResolvedValue({ count: 1 } as any);
+    vi.mocked(db.segnalazione.updateMany).mockResolvedValue({ count: 1 } as never);
     const result = await generaNumeroProtocollo({
       data: new Date(2026, 0, 15),
       regione: "LOMBARDIA",
@@ -107,11 +108,12 @@ describe("generaNumeroProtocollo", () => {
   });
 
   it("ritenta su collisione P2002 e ha successo", async () => {
-    vi.mocked(db.$transaction).mockResolvedValue(0);
-    const p2002Error = new (Prisma.PrismaClientKnownRequestError as unknown as new (msg: string, code: string) => Error)("Unique constraint", "P2002");
+    const p2002Error = new (
+      Prisma.PrismaClientKnownRequestError as unknown as new (msg: string, code: string) => Error
+    )("Unique constraint", "P2002");
     vi.mocked(db.segnalazione.updateMany)
       .mockRejectedValueOnce(p2002Error)
-      .mockResolvedValueOnce({ count: 1 } as any);
+      .mockResolvedValueOnce({ count: 1 } as never);
 
     const result = await generaNumeroProtocollo({
       data: new Date(2026, 0, 15),
@@ -126,31 +128,36 @@ describe("generaNumeroProtocollo", () => {
   });
 
   it("lancia errore dopo 10 tentativi falliti", async () => {
-    vi.mocked(db.$transaction).mockResolvedValue(0);
-    const p2002Error = new (Prisma.PrismaClientKnownRequestError as unknown as new (msg: string, code: string) => Error)("Unique constraint", "P2002");
+    const p2002Error = new (
+      Prisma.PrismaClientKnownRequestError as unknown as new (msg: string, code: string) => Error
+    )("Unique constraint", "P2002");
     vi.mocked(db.segnalazione.updateMany).mockRejectedValue(p2002Error);
 
-    await expect(generaNumeroProtocollo({
-      data: new Date(2026, 0, 15),
-      regione: "LOMBARDIA",
-      provinciaSigla: "BG",
-      segnalatoreId: "user-1",
-      segnalatoreNomeCognome: "Mario Rossi",
-      segnalazioneId: "seg-1",
-    })).rejects.toThrow("Impossibile generare un numero di protocollo");
+    await expect(
+      generaNumeroProtocollo({
+        data: new Date(2026, 0, 15),
+        regione: "LOMBARDIA",
+        provinciaSigla: "BG",
+        segnalatoreId: "user-1",
+        segnalatoreNomeCognome: "Mario Rossi",
+        segnalazioneId: "seg-1",
+      }),
+    ).rejects.toThrow("Impossibile generare un numero di protocollo");
+    expect(db.segnalazione.updateMany).toHaveBeenCalledTimes(10);
   });
 
   it("propaga errori non P2002", async () => {
-    vi.mocked(db.$transaction).mockResolvedValue(0);
     vi.mocked(db.segnalazione.updateMany).mockRejectedValue(new Error("Connection lost"));
 
-    await expect(generaNumeroProtocollo({
-      data: new Date(2026, 0, 15),
-      regione: "LOMBARDIA",
-      provinciaSigla: "BG",
-      segnalatoreId: "user-1",
-      segnalatoreNomeCognome: "Mario Rossi",
-      segnalazioneId: "seg-1",
-    })).rejects.toThrow("Connection lost");
+    await expect(
+      generaNumeroProtocollo({
+        data: new Date(2026, 0, 15),
+        regione: "LOMBARDIA",
+        provinciaSigla: "BG",
+        segnalatoreId: "user-1",
+        segnalatoreNomeCognome: "Mario Rossi",
+        segnalazioneId: "seg-1",
+      }),
+    ).rejects.toThrow("Connection lost");
   });
 });

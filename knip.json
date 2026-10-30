@@ -1,0 +1,6 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["next.config.pages.ts"],
+  "ignore": ["public/**"],
+  "ignoreDependencies": ["@emnapi/core", "@emnapi/runtime", "@emnapi/wasi-threads", "pino-pretty"]
+}

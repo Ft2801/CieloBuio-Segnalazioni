@@ -3,7 +3,7 @@
  * AutoreLink, LoginScreen.
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AutoreLink } from "@/components/app/autore-link";
 import { LoginScreen } from "@/components/app/login-screen";
@@ -30,7 +30,7 @@ describe("AutoreLink", () => {
     expect(link.className).toContain("custom-class");
   });
 
-  it("usa className vuota di default", () => {
+  it("applica lo stile base del link anche senza className", () => {
     render(<AutoreLink />);
     const link = screen.getByRole("link");
     expect(link.className).toContain("text-primary");
@@ -69,7 +69,7 @@ describe("LoginScreen", () => {
     await user.click(screen.getByRole("button", { name: /Accedi/i }));
 
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    expect(screen.getByRole("alert").textContent).toContain("Errore sconosciuto");
+    expect(screen.getByRole("alert").textContent).toContain("errore imprevisto");
   });
 
   it("chiama onLogin con email e password al submit", async () => {
@@ -86,11 +86,11 @@ describe("LoginScreen", () => {
 
   it("mostra 'Accesso in corso...' durante il caricamento", async () => {
     const user = userEvent.setup();
-    let resolveLogin: (v: unknown) => void;
+    let resolveLogin: (v: unknown) => void = () => {};
     const onLogin = vi.fn().mockReturnValue(
       new Promise((resolve) => {
         resolveLogin = resolve;
-      })
+      }),
     );
     render(<LoginScreen onLogin={onLogin} />);
 
@@ -99,7 +99,9 @@ describe("LoginScreen", () => {
     await user.click(screen.getByRole("button", { name: /Accedi/i }));
 
     expect(screen.getByRole("button", { name: /Accesso in corso/i })).toBeDisabled();
-    resolveLogin!({ ok: true });
+    await act(async () => {
+      resolveLogin({ ok: true });
+    });
   });
 
   it("mostra il link al portfolio in fondo", () => {
@@ -107,9 +109,9 @@ describe("LoginScreen", () => {
     expect(screen.getByRole("link", { name: /Fabio Tempera/i })).toBeInTheDocument();
   });
 
-  it("mostra il riferimento a SETUP.md per le credenziali demo", () => {
+  it("non mostra riferimenti a documenti interni o a modalità di prova", () => {
     render(<LoginScreen onLogin={vi.fn()} />);
-    expect(screen.getByText(/SETUP.md/i)).toBeInTheDocument();
+    expect(screen.queryByText(/SETUP\.md|demo|prova/i)).not.toBeInTheDocument();
   });
 
   it("mostra campo TOTP quando il server richiede 2FA (requiresTotp=true)", async () => {
@@ -122,14 +124,15 @@ describe("LoginScreen", () => {
     await user.click(screen.getByRole("button", { name: /Accedi/i }));
 
     // Dopo la risposta requiresTotp, il campo TOTP deve apparire
-    expect(await screen.findByLabelText(/Codice TOTP/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Codice di verifica/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText("123456")).toBeInTheDocument();
     expect(screen.getByText(/Inserisci il codice a 6 cifre/i)).toBeInTheDocument();
   });
 
   it("invia totpToken al secondo submit quando 2FA è attivo", async () => {
     const user = userEvent.setup();
-    const onLogin = vi.fn()
+    const onLogin = vi
+      .fn()
       .mockResolvedValueOnce({ ok: false, requiresTotp: true, error: "2FA richiesto" })
       .mockResolvedValueOnce({ ok: true });
     render(<LoginScreen onLogin={onLogin} />);
@@ -139,7 +142,7 @@ describe("LoginScreen", () => {
     await user.click(screen.getByRole("button", { name: /Accedi/i }));
 
     // Attendi che il campo TOTP appaia
-    const totpInput = await screen.findByLabelText(/Codice TOTP/i);
+    const totpInput = await screen.findByLabelText(/Codice di verifica/i);
     await user.type(totpInput, "123456");
     await user.click(screen.getByRole("button", { name: /Accedi/i }));
 
@@ -156,7 +159,7 @@ describe("LoginScreen", () => {
     await user.type(screen.getByLabelText(/Password/i), "password123");
     await user.click(screen.getByRole("button", { name: /Accedi/i }));
 
-    const totpInput = await screen.findByLabelText(/Codice TOTP/i);
+    const totpInput = await screen.findByLabelText(/Codice di verifica/i);
     // Prova a digitare lettere e più di 6 cifre
     await user.type(totpInput, "abc123456789");
     // Solo cifre devono passare, e massimo 6

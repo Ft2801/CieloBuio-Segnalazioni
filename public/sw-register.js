@@ -6,11 +6,17 @@
 // mostriamo un messaggio in console per avvisare l'utente di ricaricare.
 // In futuro si potrebbe integrare con il sistema di toast dell'app per
 // un feedback più visibile.
+// Memorizza l'URL durante l'esecuzione dello script: document.currentScript
+// non è più disponibile nel callback load. In una demo Pages sotto /repo/
+// lo scope e lo script devono restare in /repo/, non nella root del dominio.
+const swScriptUrl = new URL("./sw.js", document.currentScript?.src ?? window.location.href);
+const swScopePath = new URL("./", swScriptUrl).pathname;
+
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", function () {
     navigator.serviceWorker
-      .register("/sw.js", {
-        scope: "/",
+      .register(swScriptUrl.pathname, {
+        scope: swScopePath,
         // updateViaCache: "none" garantisce che il browser richieda
         // sempre la versione più recente di sw.js al server, senza
         // usare la cache HTTP per l'SW stesso.
@@ -23,17 +29,12 @@ if ("serviceWorker" in navigator) {
           var newWorker = registration.installing;
           if (!newWorker) return;
           newWorker.addEventListener("statechange", function () {
-            if (
-              newWorker.state === "installed" &&
-              navigator.serviceWorker.controller
-            ) {
+            if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
               // Una nuova versione è installata e c'è già un SW attivo:
               // l'utente sta usando la vecchia versione. Logga un
               // messaggio (in futuro, mostra un toast "Aggiornamento
               // disponibile, ricarica la pagina").
-              console.info(
-                "[SW] Nuova versione dell'app installata. Ricarica la pagina per attivarla."
-              );
+              console.info("[SW] Nuova versione dell'app installata. Ricarica la pagina per attivarla.");
             }
           });
         });

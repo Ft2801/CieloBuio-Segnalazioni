@@ -2,24 +2,19 @@
  * Test completi per src/lib/types.ts
  */
 import { describe, it, expect } from "vitest";
-import {
-  STATI_SEGNALAZIONE,
-  TRANSIZIONI_LECITE,
-  labelStato,
-  coloreStato,
-  labelRuolo,
-} from "@/lib/types";
+import { STATI_SEGNALAZIONE, TRANSIZIONI_LECITE, labelStato, puntoStato, coloreStato, labelRuolo } from "@/lib/types";
 
 describe("STATI_SEGNALAZIONE", () => {
   it("ha 7 stati", () => {
     expect(STATI_SEGNALAZIONE).toHaveLength(7);
   });
 
-  it("ogni stato ha value, label, colore, descrizione", () => {
+  it("ogni stato ha value, label, badge, punto, descrizione", () => {
     for (const s of STATI_SEGNALAZIONE) {
       expect(s.value).toBeTruthy();
       expect(s.label).toBeTruthy();
-      expect(s.colore).toBeTruthy();
+      expect(s.badge).toBeTruthy();
+      expect(s.punto).toBeTruthy();
       expect(s.descrizione).toBeTruthy();
     }
   });
@@ -73,8 +68,8 @@ describe("labelStato", () => {
     expect(labelStato("approvata")).toBe("Approvata");
     expect(labelStato("inviata")).toBe("Inviata");
     expect(labelStato("in_attesa")).toBe("In attesa");
-    expect(labelStato("chiusa_positiva")).toBe("Chiusa positiva");
-    expect(labelStato("chiusa_negativa")).toBe("Chiusa negativa");
+    expect(labelStato("chiusa_positiva")).toBe("Chiusa con esito positivo");
+    expect(labelStato("chiusa_negativa")).toBe("Chiusa con esito negativo");
   });
 
   it("ritorna la stringa originale per stati non validi", () => {
@@ -85,12 +80,18 @@ describe("labelStato", () => {
 
 describe("coloreStato", () => {
   it("ritorna colore per stati validi", () => {
-    expect(coloreStato("bozza")).toBe("bg-slate-500");
-    expect(coloreStato("inviata")).toBe("bg-emerald-600");
+    expect(coloreStato("bozza")).toBe(
+      "bg-slate-100 text-slate-800 ring-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600",
+    );
+    expect(coloreStato("inviata")).toBe(
+      "bg-emerald-100 text-emerald-900 ring-emerald-300 dark:bg-emerald-950 dark:text-emerald-100 dark:ring-emerald-800",
+    );
   });
 
   it("ritorna colore default per stati non validi", () => {
-    expect(coloreStato("unknown")).toBe("bg-slate-500");
+    expect(coloreStato("unknown")).toBe(
+      "bg-slate-100 text-slate-800 ring-slate-300 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-600",
+    );
   });
 });
 
@@ -105,5 +106,12 @@ describe("labelRuolo", () => {
   it("ritorna la stringa originale per ruoli non validi", () => {
     expect(labelRuolo("superadmin")).toBe("superadmin");
     expect(labelRuolo("")).toBe("");
+  });
+});
+
+describe("puntoStato", () => {
+  it("ritorna la classe del punto per uno stato noto e il ripiego per uno sconosciuto", () => {
+    expect(puntoStato("bozza")).toMatch(/^bg-/);
+    expect(puntoStato("unknown")).toBe("bg-slate-500");
   });
 });

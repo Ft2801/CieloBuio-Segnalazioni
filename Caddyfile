@@ -23,58 +23,68 @@
 # esegui una seconda istanza dell'app in parallelo).
 
 segnalazioni.esempio.it {
-        # Caddy reindirizza automaticamente HTTP -> HTTPS per i siti con
-        # nome dominio (comportamento di default), non serve direttiva
-        # redir esplicita.
+	# Caddy reindirizza automaticamente HTTP -> HTTPS per i siti con
+	# nome dominio (comportamento di default), non serve direttiva
+	# redir esplicita.
 
-        # L'upstream è letto da env: {$UPSTREAM_HOST} restituisce "localhost:3000"
-        # se la variabile non è impostata (deploy bare-metal di default),
-        # altrimenti il valore configurato (es. "app:3000" in Docker Compose).
-        reverse_proxy {$UPSTREAM_HOST:localhost:3000} {
-                header_up Host {host}
-                # X-Forwarded-For viene riscritto da Caddy con il remote_host
-                # reale (NON dal valore client-supplied), prevenendo spoofing.
-                header_up X-Forwarded-For {remote_host}
-                header_up X-Forwarded-Proto {scheme}
-                # X-Real-IP usato dall'app per il rate limiting per-IP:
-                # preferito rispetto a X-Forwarded-For perché non concatenable.
-                header_up X-Real-IP {remote_host}
-        }
+	# L'upstream è letto da env: {$UPSTREAM_HOST:localhost:3000} restituisce
+	# "localhost:3000" se la variabile non è impostata (deploy bare-metal di default),
+	# altrimenti il valore configurato (es. "app:3000" in Docker Compose).
+	reverse_proxy {$UPSTREAM_HOST:localhost:3000} {
+		header_up Host {host}
+		# Il X-Forwarded-For inviato dal client viene eliminato e non viene
+		# inoltrato all'app, che legge solo X-Real-IP (vedi sotto).
+		header_up -X-Forwarded-For
+		# X-Real-IP è l'unico IP letto dall'app (rate limiting per IP del login).
+		# Caddy lo imposta sempre dal remote_host reale.
+		header_up X-Real-IP {remote_host}
+	}
 
-        # Header di sicurezza a livello di proxy (defense-in-depth oltre
-        # al middleware Next.js). Applicati anche agli asset statici che
-        # il matcher del middleware potrebbe escludere.
-        header {
-                # HSTS: max-age 2 anni con includeSubDomains. Non include
-                # preload per evitare lock-in permanente del dominio.
-                Strict-Transport-Security "max-age=63072000; includeSubDomains"
-                X-Content-Type-Options "nosniff"
-                X-Frame-Options "DENY"
-                Referrer-Policy "strict-origin-when-cross-origin"
-                Permissions-Policy "camera=(), microphone=(), geolocation=(self), interest-cohort=()"
-                # CSP di base: defense-in-depth. L'app imposta una CSP più
-                # specifica via middleware, ma in caso di regressioni sul
-                # matcher questa blocca comunque gli attacchi più comuni.
-                Content-Security-Policy "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
-        }
+	# Header di sicurezza a livello di proxy (defense-in-depth). L'app Next.js è
+	# la fonte primaria: il prefisso "?" imposta ciascun header solo se la
+	# risposta dell'app non ne contiene già uno, evitando duplicati. Caddy copre
+	# così le risposte che non passano dall'app.
+	header {
+		# HSTS: max-age 2 anni con includeSubDomains. Non include
+		# preload per evitare lock-in permanente del dominio.
+		?Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		?X-Content-Type-Options "nosniff"
+		?X-Frame-Options "DENY"
+		?Referrer-Policy "strict-origin-when-cross-origin"
+		?Permissions-Policy "camera=(), microphone=(), geolocation=(self), interest-cohort=()"
+		?Cross-Origin-Opener-Policy "same-origin"
+		?Cross-Origin-Resource-Policy "same-origin"
+		?X-Permitted-Cross-Domain-Policies "none"
+		# CSP di base: defense-in-depth per le risposte che l'app non
+		# protegge già. Il prefisso "?" imposta l'header solo se la
+		# risposta dell'app non ne contiene uno: la CSP con nonce per
+		# richiesta del proxy Next.js ha quindi la precedenza.
+		?Content-Security-Policy "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+	}
 
-        # Compressione delle risposte (riduce il traffico su hosting economici
-        # con banda limitata, coerente col vincolo di basso costo del progetto).
-        encode gzip zstd
+	# Compressione delle risposte (riduce il traffico su hosting economici
+	# con banda limitata, coerente col vincolo di basso costo del progetto).
+	encode gzip zstd
 
-        # Limite dimensione body per mitigare DoS via upload massivi. L'app
-        # valida i singoli allegati a 10 MB, ma un limite anche al proxy
-        # previene richieste multipart enormi che saturebbero la memoria
-        # dell'app prima della validazione.
-        request_body {
-                max_size 50MB
-        }
+	# Limite dimensione body per mitigare DoS via upload massivi. L'app
+	# valida i singoli allegati a 10 MB, ma un limite anche al proxy
+	# previene richieste multipart enormi che saturebbero la memoria
+	# dell'app prima della validazione.
+	request_body {
+		max_size 12MB
+	}
 
-        # Log di accesso in formato JSON. In Docker, output su stdout per
-        # essere raccolto dal driver di logging di Docker (con rotation).
-        # In bare-metal, file con rotation.
-        log {
-                output stdout
-                format json
-        }
+	# Richieste con Content-Length oltre il limite: risposta 413 immediata,
+	# senza inoltrare il corpo all'app. Il valore 12582912 equivale a 12 MiB.
+	# Le richieste chunked (senza Content-Length) restano coperte da request_body.
+	@corpo_troppo_grande expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 12582912`
+	respond @corpo_troppo_grande 413
+
+	# Log di accesso in formato JSON su stdout. In Docker lo stdout è
+	# raccolto dal driver di logging (con rotation); con Caddy eseguito
+	# come servizio systemd finisce nel journal.
+	log {
+		output stdout
+		format json
+	}
 }

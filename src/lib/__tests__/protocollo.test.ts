@@ -2,7 +2,7 @@
  * Test completi per src/lib/protocollo.ts
  */
 import { describe, it, expect } from "vitest";
-import { getRegioneCodice, getInizialiSegnalatore, pad2 } from "@/lib/protocollo";
+import { ErroreProtocollo, getRegioneCodice, getInizialiSegnalatore, pad2 } from "@/lib/protocollo";
 
 describe("getRegioneCodice", () => {
   it("ritorna codice corretto per tutte le regioni note", () => {
@@ -43,17 +43,16 @@ describe("getRegioneCodice", () => {
     expect(getRegioneCodice("LoMbArDiA")).toBe("LOM");
   });
 
-  it("ritorna prime 3 lettere per regioni non mappate", () => {
-    expect(getRegioneCodice("MOLISE")).toBe("MOL");
-    expect(getRegioneCodice("SICILIA")).toBe("SIC");
+  it("rifiuta regioni non mappate con errore esplicito", () => {
+    expect(() => getRegioneCodice("REGIONE_INESISTENTE")).toThrow(ErroreProtocollo);
   });
 
-  it("gestisce stringa vuota", () => {
-    expect(getRegioneCodice("")).toBe("XXX");
+  it("rifiuta stringa vuota", () => {
+    expect(() => getRegioneCodice("")).toThrow(ErroreProtocollo);
   });
 
-  it("gestisce stringa con solo spazi", () => {
-    expect(getRegioneCodice("   ")).toBe("XXX");
+  it("rifiuta stringa con solo spazi", () => {
+    expect(() => getRegioneCodice("   ")).toThrow(ErroreProtocollo);
   });
 });
 

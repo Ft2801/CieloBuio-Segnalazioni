@@ -1,21 +1,21 @@
 /**
  * Test di rendering e interazione per DettaglioSegnalazione.
  *
- * Si coprono: caricamento iniziale, errori di rete, modalita demo,
+ * Si coprono: caricamento iniziale, errori di rete, modalità demo,
  * rendering condizionale di ciascun ramo (stato, ruolo, includiArpa,
  * allegati, storico, coordinate, notaRifiuto, livelloRecidiva,
  * mittenteVisibile, ecc.) e interazioni utente (invia in revisione,
  * approva, rifiuta con nota, simula PEC, invia PEC reale, cambia stato,
  * elimina bozza, anteprima lettera, recidiva) con relativi percorsi
  * di successo ed errore. Si verifica anche la competenza territoriale
- * dei referenti e il blocco delle azioni in modalita demo.
+ * dei referenti e il blocco delle azioni in modalità demo.
  *
  * Autore: Fabio Tempera (2026)
  */
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
-import { render, screen, waitFor, act, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { SessionUser, Segnalazione, StatoSegnalazione, StoricoStato, Allegato } from "@/lib/types";
+import type { SessionUser, Segnalazione, StoricoStato, Allegato } from "@/lib/types";
 import { DettaglioSegnalazione } from "@/components/app/dettaglio-segnalazione";
 
 // -----------------------------------------------------------------------------
@@ -39,7 +39,7 @@ beforeAll(() => {
 // Mock delle dipendenze esterne
 // -----------------------------------------------------------------------------
 
-// Toast mockato: ogni test puo ispezionare le chiamate a toast tramite
+// Toast mockato: ogni test può ispezionare le chiamate a toast tramite
 // toastSpy.mock.calls.
 const toastSpy = vi.fn();
 vi.mock("@/hooks/use-toast", () => ({
@@ -59,10 +59,6 @@ vi.mock("@/lib/demo-mode", () => ({
 // window.open stub (usato da "Anteprima lettera" e "Lettera con allegati")
 const openSpy = vi.fn();
 vi.stubGlobal("open", openSpy);
-
-// window.confirm stub (usato da "Invia PEC" e "Elimina bozza")
-const confirmSpy = vi.fn();
-vi.stubGlobal("confirm", confirmSpy);
 
 // fetch globale: ogni test configura mockResolvedValueOnce o mockImplementation.
 const mockFetch = vi.fn();
@@ -220,7 +216,7 @@ function renderDettaglio(
     onApriModifica: (id: string) => void;
     onNuovaRecidiva: (idPrecedente: string) => void;
     onAggiornata: () => void;
-  }> = {}
+  }> = {},
 ) {
   return render(
     <DettaglioSegnalazione
@@ -230,7 +226,7 @@ function renderDettaglio(
       onApriModifica={props.onApriModifica ?? vi.fn()}
       onNuovaRecidiva={props.onNuovaRecidiva ?? vi.fn()}
       onAggiornata={props.onAggiornata ?? vi.fn()}
-    />
+    />,
   );
 }
 
@@ -238,7 +234,7 @@ function renderDettaglio(
 // (la parola "Caricamento" scompare dal DOM).
 async function attendiCaricamento() {
   await waitFor(() => {
-    expect(screen.queryByText("Caricamento…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Caricamento in corso…")).not.toBeInTheDocument();
   });
 }
 
@@ -249,7 +245,6 @@ async function attendiCaricamento() {
 beforeEach(() => {
   mockFetch.mockReset();
   openSpy.mockReset();
-  confirmSpy.mockReset();
   toastSpy.mockReset();
   isDemoMock.mockReset();
   isDemoMock.mockReturnValue(false);
@@ -269,14 +264,14 @@ describe("DettaglioSegnalazione - caricamento e stati di errore", () => {
   it("mostra lo stato di caricamento iniziale", () => {
     mockFetch.mockReturnValue(new Promise(() => {})); // mai risolta
     renderDettaglio("s1", creaUser());
-    expect(screen.getByText("Caricamento…")).toBeInTheDocument();
+    expect(screen.getByText("Caricamento in corso…")).toBeInTheDocument();
   });
 
   it("mostra 'Segnalazione non trovata' quando il server ritorna null", async () => {
     mockCaricamentoIniziale(null);
     renderDettaglio("s-mancante", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText("Segnalazione non trovata")).toBeInTheDocument();
+    expect(screen.getByText("Segnalazione non trovata.")).toBeInTheDocument();
   });
 
   it("mostra il pulsante Indietro anche nello stato 'non trovata'", async () => {
@@ -300,7 +295,7 @@ describe("DettaglioSegnalazione - caricamento e stati di errore", () => {
     mockFetch.mockRejectedValueOnce(new Error("network"));
     renderDettaglio("s-err", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText("Segnalazione non trovata")).toBeInTheDocument();
+    expect(screen.getByText("Impossibile caricare la segnalazione")).toBeInTheDocument();
   });
 
   it("gestisce risposta json non valida in carica (catch ritorna {})", async () => {
@@ -308,7 +303,7 @@ describe("DettaglioSegnalazione - caricamento e stati di errore", () => {
     renderDettaglio("s-badjson", creaUser());
     await attendiCaricamento();
     // data.segnalazione e undefined -> segnalazione resta null
-    expect(screen.getByText("Segnalazione non trovata")).toBeInTheDocument();
+    expect(screen.getByText("Segnalazione non trovata.")).toBeInTheDocument();
   });
 
   it("effettua GET /api/segnalazioni/[id] al montaggio", async () => {
@@ -320,10 +315,10 @@ describe("DettaglioSegnalazione - caricamento e stati di errore", () => {
 });
 
 // -----------------------------------------------------------------------------
-// Modalita demo
+// Modalità demo
 // -----------------------------------------------------------------------------
 
-describe("DettaglioSegnalazione - modalita demo", () => {
+describe("DettaglioSegnalazione - modalità demo", () => {
   it("usa getDemoSegnalazione senza chiamare fetch", async () => {
     isDemoMock.mockReturnValue(true);
     renderDettaglio("demo-1", creaUserDemo({ ruolo: "volontario" }));
@@ -337,14 +332,14 @@ describe("DettaglioSegnalazione - modalita demo", () => {
     isDemoMock.mockReturnValue(true);
     renderDettaglio("demo-inesistente", creaUserDemo({ ruolo: "volontario" }));
     await attendiCaricamento();
-    expect(screen.getByText("Segnalazione non trovata")).toBeInTheDocument();
+    expect(screen.getByText("Segnalazione non trovata.")).toBeInTheDocument();
   });
 
   it("ricarica dal demo data quando id cambia", async () => {
     isDemoMock.mockReturnValue(true);
     const { rerender } = renderDettaglio("demo-1", creaUserDemo({ ruolo: "volontario" }));
     await attendiCaricamento();
-    expect(screen.getByText("Via dei Platani 4")).toBeInTheDocument();
+    expect(screen.getAllByText("Via dei Platani 4").length).toBeGreaterThan(0);
     // Cambio id: la funzione carica viene rieseguita con nuovo id
     rerender(
       <DettaglioSegnalazione
@@ -354,10 +349,10 @@ describe("DettaglioSegnalazione - modalita demo", () => {
         onApriModifica={vi.fn()}
         onNuovaRecidiva={vi.fn()}
         onAggiornata={vi.fn()}
-      />
+      />,
     );
     await waitFor(() => {
-      expect(screen.getByText("Via dell'Industria 5")).toBeInTheDocument();
+      expect(screen.getAllByText("Via dell'Industria 5").length).toBeGreaterThan(0);
     });
   });
 });
@@ -367,22 +362,25 @@ describe("DettaglioSegnalazione - modalita demo", () => {
 // -----------------------------------------------------------------------------
 
 describe("DettaglioSegnalazione - header è stato", () => {
-  it("mostra il numeroProtocollo come titolo quando presente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      numeroProtocollo: "20260101-TT-X-XX01",
-      stato: "inviata",
-    }));
+  it("mostra l'indirizzo come titolo e il protocollo nel sottotitolo quando presente", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        numeroProtocollo: "20260101-TT-X-XX01",
+        stato: "inviata",
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByRole("heading", { name: "20260101-TT-X-XX01" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Via Test 1" })).toBeInTheDocument();
+    expect(screen.getByText("Protocollo 20260101-TT-X-XX01 · Comune Test")).toBeInTheDocument();
   });
 
-  it("mostra 'Bozza senza protocollo' come titolo quando numeroProtocollo è null", async () => {
+  it("mostra 'Bozza, non ancora inviata' come sottotitolo quando numeroProtocollo è null", async () => {
     mockCaricamentoIniziale(creaSegnalazione({ id: "s1", numeroProtocollo: null }));
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByRole("heading", { name: "Bozza senza protocollo" })).toBeInTheDocument();
+    expect(screen.getByText("Bozza, non ancora inviata · Comune Test")).toBeInTheDocument();
   });
 
   it("mostra l'etichetta dello stato corrente", async () => {
@@ -393,11 +391,13 @@ describe("DettaglioSegnalazione - header è stato", () => {
   });
 
   it("mostra il badge 'Recidiva livello N' quando livelloRecidiva > 1", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_attesa",
-      livelloRecidiva: 3,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_attesa",
+        livelloRecidiva: 3,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText(/Recidiva livello 3/i)).toBeInTheDocument();
@@ -427,11 +427,13 @@ describe("DettaglioSegnalazione - header è stato", () => {
 
 describe("DettaglioSegnalazione - notaRifiuto", () => {
   it("mostra la card 'Rifiutata dal referente' con la nota quando presente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "bozza",
-      notaRifiuto: "Mancano le foto dell'impianto",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "bozza",
+        notaRifiuto: "Mancano le foto dell'impianto",
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText("Rifiutata dal referente")).toBeInTheDocument();
@@ -452,11 +454,13 @@ describe("DettaglioSegnalazione - notaRifiuto", () => {
 
 describe("DettaglioSegnalazione - azioni volontario su bozza", () => {
   function setupBozzaOwner() {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "bozza",
-      volontarioId: "u1",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "bozza",
+        volontarioId: "u1",
+      }),
+    );
   }
 
   it("mostra Modifica, Invia in revisione, Elimina bozza per owner su bozza", async () => {
@@ -469,11 +473,13 @@ describe("DettaglioSegnalazione - azioni volontario su bozza", () => {
   });
 
   it("non mostra Modifica se l'utente non è il proprietario", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "bozza",
-      volontarioId: "altro-user",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "bozza",
+        volontarioId: "altro-user",
+      }),
+    );
     renderDettaglio("s1", creaUser({ id: "u1", ruolo: "volontario" }));
     await attendiCaricamento();
     expect(screen.queryByRole("button", { name: /^Modifica$/i })).not.toBeInTheDocument();
@@ -505,16 +511,12 @@ describe("DettaglioSegnalazione - azioni volontario su bozza", () => {
     await user.click(screen.getByRole("button", { name: /Invia in revisione/i }));
     await waitFor(() => expect(onAggiornata).toHaveBeenCalled());
     // Verifica URL e body della POST
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/s1/cambia-stato"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/s1/cambia-stato");
     expect(call).toBeDefined();
-    expect(call![1]).toMatchObject({ method: "POST" });
-    expect(JSON.parse(call![1].body)).toEqual({ stato: "in_revisione" });
+    expect(call?.[1]).toMatchObject({ method: "POST" });
+    expect(JSON.parse(call?.[1].body)).toEqual({ stato: "in_revisione" });
     // Toast di successo
-    expect(toastSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Inviata in revisione" })
-    );
+    expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Inviata in revisione" }));
   });
 
   it("invia in revisione con fallimento HTTP: toast errore", async () => {
@@ -526,41 +528,40 @@ describe("DettaglioSegnalazione - azioni volontario su bozza", () => {
     await user.click(screen.getByRole("button", { name: /Invia in revisione/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "Stato non valido", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Stato non valido",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("elimina bozza con successo dopo confirm true: DELETE e onBack", async () => {
+  it("elimina bozza con successo dopo conferma nel dialog: DELETE e onBack", async () => {
     const user = userEvent.setup();
     const onBack = vi.fn();
     setupBozzaOwner();
-    confirmSpy.mockReturnValue(true);
     mockFetch.mockResolvedValueOnce(okResponse({ ok: true })); // DELETE
     renderDettaglio("s1", creaUser({ id: "u1" }), { onBack });
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Elimina bozza/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Elimina bozza" }));
     await waitFor(() => expect(onBack).toHaveBeenCalled());
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/s1" && c[1]?.method === "DELETE"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/s1" && c[1]?.method === "DELETE");
     expect(call).toBeDefined();
     expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Bozza eliminata" }));
   });
 
-  it("non elimina la bozza se confirm ritorna false", async () => {
+  it("non elimina la bozza se il dialog di conferma viene annullato", async () => {
     const user = userEvent.setup();
     const onBack = vi.fn();
     setupBozzaOwner();
-    confirmSpy.mockReturnValue(false);
     renderDettaglio("s1", creaUser({ id: "u1" }), { onBack });
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Elimina bozza/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Annulla" }));
     // Nessuna DELETE effettuata
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/s1" && c[1]?.method === "DELETE"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/s1" && c[1]?.method === "DELETE");
     expect(call).toBeUndefined();
     expect(onBack).not.toHaveBeenCalled();
   });
@@ -568,15 +569,19 @@ describe("DettaglioSegnalazione - azioni volontario su bozza", () => {
   it("elimina bozza con fallimento HTTP: toast errore", async () => {
     const user = userEvent.setup();
     setupBozzaOwner();
-    confirmSpy.mockReturnValue(true);
     mockFetch.mockResolvedValueOnce(errorResponse(403, "Non autorizzato"));
     renderDettaglio("s1", creaUser({ id: "u1" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Elimina bozza/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Elimina bozza" }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "Non autorizzato", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Non autorizzato",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 });
@@ -587,37 +592,47 @@ describe("DettaglioSegnalazione - azioni volontario su bozza", () => {
 
 describe("DettaglioSegnalazione - azioni referente su in_revisione", () => {
   function setupInRevisione() {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_revisione",
-      volontarioId: "v1",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_revisione",
+        volontarioId: "v1",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
   }
 
   it("mostra Modifica, Approva, Rifiuta con nota per referente provinciale competente", async () => {
     setupInRevisione();
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 1,
-    }));
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 1,
+      }),
+    );
     await attendiCaricamento();
     expect(screen.getByRole("button", { name: /Modifica/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Approva/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Rifiuta con nota/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Cambia stato/i })).not.toBeInTheDocument();
   });
 
   it("chiama onApriModifica al click del pulsante Modifica (referente)", async () => {
     const user = userEvent.setup();
     const onApriModifica = vi.fn();
     setupInRevisione();
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 1,
-    }), { onApriModifica });
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 1,
+      }),
+      { onApriModifica },
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Modifica/i }));
     expect(onApriModifica).toHaveBeenCalledWith("s1");
@@ -630,50 +645,68 @@ describe("DettaglioSegnalazione - azioni referente su in_revisione", () => {
     mockFetch
       .mockResolvedValueOnce(okResponse({ ok: true })) // POST approva
       .mockResolvedValueOnce(okResponse({ segnalazione: creaSegnalazione({ id: "s1", stato: "approvata" }) }));
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 1,
-    }), { onAggiornata });
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 1,
+      }),
+      { onAggiornata },
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Approva/i }));
     await waitFor(() => expect(onAggiornata).toHaveBeenCalled());
-    expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/s1/approva", { method: "POST" });
-    expect(toastSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Approvata" })
-    );
+    expect(mockFetch).toHaveBeenCalledWith("/api/segnalazioni/s1/approva", {
+      method: "POST",
+      headers: expect.any(Headers),
+    });
+    const azione = mockFetch.mock.calls.find(([url]) => url === "/api/segnalazioni/s1/approva");
+    expect((azione?.[1]?.headers as Headers).get("If-Match")).toBeTruthy();
+    expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Segnalazione approvata" }));
   });
 
   it("approva con fallimento: toast errore con messaggio server", async () => {
     const user = userEvent.setup();
     setupInRevisione();
     mockFetch.mockResolvedValueOnce(errorResponse(403, "Non competente"));
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 1,
-    }));
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 1,
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Approva/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "Non competente", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Non competente",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("rifiuta con successo: POST /rifiuta con nota, chiude dialog e resetta", async () => {
+  it("rifiuta con successo: POST /rifiuta con nota e chiude il dialog", async () => {
     const user = userEvent.setup();
     const onAggiornata = vi.fn();
     setupInRevisione();
     mockFetch
       .mockResolvedValueOnce(okResponse({ ok: true })) // POST rifiuta
       .mockResolvedValueOnce(okResponse({ segnalazione: creaSegnalazione({ id: "s1", stato: "bozza" }) }));
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 1,
-    }), { onAggiornata });
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 1,
+      }),
+      { onAggiornata },
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Rifiuta con nota/i }));
     // Dialog aperto
@@ -682,37 +715,40 @@ describe("DettaglioSegnalazione - azioni referente su in_revisione", () => {
     await user.click(screen.getByRole("button", { name: /Conferma rifiuto/i }));
     await waitFor(() => expect(onAggiornata).toHaveBeenCalled());
     // Body contiene la nota
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/s1/rifiuta"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/s1/rifiuta");
     expect(call).toBeDefined();
-    expect(JSON.parse(call![1].body)).toEqual({ nota: "Foto mancanti" });
+    expect(JSON.parse(call?.[1].body)).toEqual({ nota: "Foto mancanti" });
     expect(toastSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Rifiutata" })
+      expect.objectContaining({
+        title: "Segnalazione rifiutata",
+        description: expect.stringContaining("La consegna dell'eventuale email non è garantita"),
+      }),
     );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("rifiuta senza nota: mostra toast 'Nota obbligatoria' e non chiama fetch", async () => {
     const user = userEvent.setup();
     setupInRevisione();
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 1,
-    }));
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 1,
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Rifiuta con nota/i }));
     const btnConferma = await screen.findByRole("button", { name: /Conferma rifiuto/i });
     await user.click(btnConferma);
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Nota obbligatoria", variant: "destructive" })
-      )
+        expect.objectContaining({ title: "Nota obbligatoria", variant: "destructive" }),
+      ),
     );
     // Nessuna POST verso /rifiuta
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/s1/rifiuta"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/s1/rifiuta");
     expect(call).toBeUndefined();
   });
 
@@ -720,11 +756,14 @@ describe("DettaglioSegnalazione - azioni referente su in_revisione", () => {
     const user = userEvent.setup();
     setupInRevisione();
     mockFetch.mockResolvedValueOnce(errorResponse(500, "DB down"));
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 1,
-    }));
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 1,
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Rifiuta con nota/i }));
     const textarea = await screen.findByPlaceholderText(/Mancano le foto/i);
@@ -732,19 +771,22 @@ describe("DettaglioSegnalazione - azioni referente su in_revisione", () => {
     await user.click(screen.getByRole("button", { name: /Conferma rifiuto/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "DB down", variant: "destructive" })
-      )
+        expect.objectContaining({ title: "Operazione non riuscita", description: "DB down", variant: "destructive" }),
+      ),
     );
   });
 
   it("chiude il dialog rifiuto cliccando Annulla", async () => {
     const user = userEvent.setup();
     setupInRevisione();
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 1,
-    }));
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 1,
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Rifiuta con nota/i }));
     const annulla = await screen.findByRole("button", { name: /Annulla/i });
@@ -770,13 +812,15 @@ describe("DettaglioSegnalazione - azioni referente su in_revisione", () => {
 
 describe("DettaglioSegnalazione - azioni su approvata", () => {
   function setupApprovata() {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "approvata",
-      volontarioId: "v1",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "approvata",
+        volontarioId: "v1",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
   }
 
   it("mostra Simula spedizione e Invia PEC per admin su approvata", async () => {
@@ -791,48 +835,49 @@ describe("DettaglioSegnalazione - azioni su approvata", () => {
     setupApprovata();
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
-    expect(screen.getByText(/La simulazione invia una PEC di prova solo al mittente/i)).toBeInTheDocument();
+    expect(screen.getByText(/La simulazione non contatta il Comune/i)).toBeInTheDocument();
   });
 
   it("simula PEC con successo (emailInviata=true): toast 'Simulazione inviata'", async () => {
     const user = userEvent.setup();
     setupApprovata();
-    mockFetch.mockResolvedValueOnce(okResponse({
-      ok: true,
-      emailInviata: true,
-      messaggio: "Email di prova inviata",
-      numeroProtocollo: "PROTO-1",
-    }));
+    mockFetch.mockResolvedValueOnce(
+      okResponse({
+        ok: true,
+        emailInviata: true,
+        messaggio: "Anteprima inviata al tuo indirizzo",
+        numeroProtocollo: "PROTO-1",
+      }),
+    );
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Simula spedizione/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Simulazione inviata",
-          description: "Email di prova inviata. Protocollo: PROTO-1",
-          duration: 6000,
-        })
-      )
+          title: "Anteprima inviata",
+          description: "Anteprima inviata al tuo indirizzo. Protocollo previsionale: PROTO-1",
+        }),
+      ),
     );
   });
 
   it("simula PEC con successo (emailInviata=false): toast 'Simulazione registrata'", async () => {
     const user = userEvent.setup();
     setupApprovata();
-    mockFetch.mockResolvedValueOnce(okResponse({
-      ok: true,
-      emailInviata: false,
-      messaggio: "Registrata senza invio",
-      numeroProtocollo: "PROTO-2",
-    }));
+    mockFetch.mockResolvedValueOnce(
+      okResponse({
+        ok: true,
+        emailInviata: false,
+        messaggio: "Registrata senza invio",
+        numeroProtocollo: "PROTO-2",
+      }),
+    );
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Simula spedizione/i }));
     await waitFor(() =>
-      expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Simulazione registrata" })
-      )
+      expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Simulazione registrata" })),
     );
   });
 
@@ -845,22 +890,19 @@ describe("DettaglioSegnalazione - azioni su approvata", () => {
     await user.click(screen.getByRole("button", { name: /Simula spedizione/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "Stato non approvato" })
-      )
+        expect.objectContaining({ title: "Operazione non riuscita", description: "Stato non approvato" }),
+      ),
     );
   });
 
-  it("non invia PEC reale se confirm ritorna false", async () => {
+  it("non invia PEC reale se il dialog di conferma viene annullato", async () => {
     const user = userEvent.setup();
     setupApprovata();
-    confirmSpy.mockReturnValue(false);
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia PEC/i }));
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/s1/invia-pec"
-    );
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Annulla" }));
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/s1/invia-pec");
     expect(call).toBeUndefined();
   });
 
@@ -868,77 +910,82 @@ describe("DettaglioSegnalazione - azioni su approvata", () => {
     const user = userEvent.setup();
     const onAggiornata = vi.fn();
     setupApprovata();
-    confirmSpy.mockReturnValue(true);
     mockFetch
-      .mockResolvedValueOnce(okResponse({
-        ok: true,
-        numeroProtocollo: "PROTO-3",
-        destinatari: ["a@b.it", "c@d.it"],
-      }))
+      .mockResolvedValueOnce(
+        okResponse({
+          ok: true,
+          numeroProtocollo: "PROTO-3",
+          destinatari: ["a@b.it", "c@d.it"],
+        }),
+      )
       .mockResolvedValueOnce(okResponse({ segnalazione: creaSegnalazione({ id: "s1", stato: "inviata" }) }));
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }), { onAggiornata });
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia PEC/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Invia PEC" }));
     await waitFor(() => expect(onAggiornata).toHaveBeenCalled());
     expect(toastSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "PEC inviata",
-        description: "Protocollo PROTO-3. Destinatari: a@b.it, c@d.it",
-      })
+        description: "Protocollo PROTO-3. Destinatari: a@b.it, c@d.it.",
+      }),
     );
   });
 
   it("invia PEC reale con destinatari non array: mostra 'n/d'", async () => {
     const user = userEvent.setup();
     setupApprovata();
-    confirmSpy.mockReturnValue(true);
     mockFetch
-      .mockResolvedValueOnce(okResponse({
-        ok: true,
-        numeroProtocollo: "PROTO-4",
-        destinatari: null,
-      }))
+      .mockResolvedValueOnce(
+        okResponse({
+          ok: true,
+          numeroProtocollo: "PROTO-4",
+          destinatari: null,
+        }),
+      )
       .mockResolvedValueOnce(okResponse({ segnalazione: creaSegnalazione({ id: "s1", stato: "inviata" }) }));
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia PEC/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Invia PEC" }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          description: "Protocollo PROTO-4. Destinatari: n/d",
-        })
-      )
+          description: "Protocollo PROTO-4. Destinatari: n/d.",
+        }),
+      ),
     );
   });
 
   it("invia PEC reale con numeroProtocollo null: mostra 'n/d'", async () => {
     const user = userEvent.setup();
     setupApprovata();
-    confirmSpy.mockReturnValue(true);
     mockFetch
-      .mockResolvedValueOnce(okResponse({
-        ok: true,
-        numeroProtocollo: null,
-        destinatari: ["a@b.it"],
-      }))
+      .mockResolvedValueOnce(
+        okResponse({
+          ok: true,
+          numeroProtocollo: null,
+          destinatari: ["a@b.it"],
+        }),
+      )
       .mockResolvedValueOnce(okResponse({ segnalazione: creaSegnalazione({ id: "s1", stato: "inviata" }) }));
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia PEC/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Invia PEC" }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          description: "Protocollo n/d. Destinatari: a@b.it",
-        })
-      )
+          description: "Protocollo n/d. Destinatari: a@b.it.",
+        }),
+      ),
     );
   });
 
   it("invia PEC reale con risposta json invalida: 'Errore sconosciuto'", async () => {
     const user = userEvent.setup();
     setupApprovata();
-    confirmSpy.mockReturnValue(true);
-    // json() lancia -> data = {} -> error undefined -> "Errore sconosciuto"
+    // json() lancia -> data = {} -> error undefined -> "Operazione non riuscita. Riprova tra qualche istante."
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 500,
@@ -950,25 +997,34 @@ describe("DettaglioSegnalazione - azioni su approvata", () => {
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia PEC/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Invia PEC" }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "Errore sconosciuto", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
   it("invia PEC reale con fallimento HTTP e messaggio: toast errore", async () => {
     const user = userEvent.setup();
     setupApprovata();
-    confirmSpy.mockReturnValue(true);
     mockFetch.mockResolvedValueOnce(errorResponse(403, "Non competente"));
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia PEC/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Invia PEC" }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "Non competente", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Non competente",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 });
@@ -979,12 +1035,14 @@ describe("DettaglioSegnalazione - azioni su approvata", () => {
 
 describe("DettaglioSegnalazione - cambio stato manuale", () => {
   function setupInAttesa() {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_attesa",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_attesa",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
   }
 
   it("mostra il pulsante Cambia stato quando ci sono transizioni lecite", async () => {
@@ -995,10 +1053,12 @@ describe("DettaglioSegnalazione - cambio stato manuale", () => {
   });
 
   it("non mostra il pulsante Cambia stato per stati terminali (chiusa_positiva)", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "chiusa_positiva",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "chiusa_positiva",
+      }),
+    );
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     expect(screen.queryByRole("button", { name: /Cambia stato/i })).not.toBeInTheDocument();
@@ -1013,10 +1073,10 @@ describe("DettaglioSegnalazione - cambio stato manuale", () => {
     await user.click(screen.getByRole("button", { name: /Cambia stato/i }));
     // Dialog aperto
     expect(await screen.findByText("Cambia stato della segnalazione")).toBeInTheDocument();
-    // Il trigger del Select mostra il primo stato lecito: "Chiusa positiva".
-    // Radix Select puo renderizzare anche gli item nel DOM (nascosti):
+    // Il trigger del Select mostra il primo stato lecito: "Chiusa con esito positivo".
+    // Radix Select può renderizzare anche gli item nel DOM (nascosti):
     // si usa getAllByText per tollerare più match.
-    expect(screen.getAllByText("Chiusa positiva").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Chiusa con esito positivo").length).toBeGreaterThan(0);
   });
 
   it("conferma cambio stato con successo: POST /cambia-stato con stato e nota null", async () => {
@@ -1032,20 +1092,18 @@ describe("DettaglioSegnalazione - cambio stato manuale", () => {
     const conferma = await screen.findByRole("button", { name: /^Conferma$/i });
     await user.click(conferma);
     await waitFor(() => expect(onAggiornata).toHaveBeenCalled());
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/s1/cambia-stato"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/s1/cambia-stato");
     expect(call).toBeDefined();
     // Body ha stato="chiusa_positiva" (primo della lista) e nota=null (vuoto)
-    expect(JSON.parse(call![1].body)).toEqual({
+    expect(JSON.parse(call?.[1].body)).toEqual({
       stato: "chiusa_positiva",
       nota: null,
     });
     expect(toastSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "Stato aggiornato",
-        description: "Nuovo stato: Chiusa positiva",
-      })
+        description: "Nuovo stato: Chiusa con esito positivo.",
+      }),
     );
   });
 
@@ -1058,18 +1116,12 @@ describe("DettaglioSegnalazione - cambio stato manuale", () => {
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Cambia stato/i }));
-    const notaTextarea = await screen.findByLabelText(/Nota \(opzionale\)/i);
+    const notaTextarea = await screen.findByLabelText(/Nota \(facoltativa\)/i);
     await user.type(notaTextarea, "Impianto adeguato");
     await user.click(screen.getByRole("button", { name: /^Conferma$/i }));
-    await waitFor(() =>
-      expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Stato aggiornato" })
-      )
-    );
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/s1/cambia-stato"
-    );
-    expect(JSON.parse(call![1].body)).toEqual({
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith(expect.objectContaining({ title: "Stato aggiornato" })));
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/s1/cambia-stato");
+    expect(JSON.parse(call?.[1].body)).toEqual({
       stato: "chiusa_positiva",
       nota: "Impianto adeguato",
     });
@@ -1086,8 +1138,8 @@ describe("DettaglioSegnalazione - cambio stato manuale", () => {
     await user.click(conferma);
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "Transizione non lecita" })
-      )
+        expect.objectContaining({ title: "Operazione non riuscita", description: "Transizione non lecita" }),
+      ),
     );
   });
 
@@ -1113,95 +1165,116 @@ describe("DettaglioSegnalazione - cambio stato manuale", () => {
 });
 
 // -----------------------------------------------------------------------------
-// Genera segnalazione collegata (recidiva)
+// Crea segnalazione collegata (recidiva)
 // -----------------------------------------------------------------------------
 
 describe("DettaglioSegnalazione - recidiva", () => {
-  it("mostra 'Genera segnalazione collegata' per stato inviata e admin", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "inviata",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+  it("mostra 'Crea segnalazione collegata' per stato inviata e volontario proprietario", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "inviata",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio("s1", creaUser({ id: "v1", ruolo: "volontario" }));
     await attendiCaricamento();
-    expect(screen.getByRole("button", { name: /Genera segnalazione collegata/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Crea segnalazione collegata/i })).toBeInTheDocument();
   });
 
-  it("mostra 'Genera segnalazione collegata' per stato in_attesa", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_attesa",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+  it("mostra 'Crea segnalazione collegata' per stato in_attesa", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_attesa",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio("s1", creaUser({ id: "v1", ruolo: "volontario" }));
     await attendiCaricamento();
-    expect(screen.getByRole("button", { name: /Genera segnalazione collegata/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Crea segnalazione collegata/i })).toBeInTheDocument();
   });
 
-  it("mostra 'Genera segnalazione collegata' per stato chiusa_negativa", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "chiusa_negativa",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+  it("mostra 'Crea segnalazione collegata' per stato chiusa_negativa", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "chiusa_negativa",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio("s1", creaUser({ id: "v1", ruolo: "volontario" }));
     await attendiCaricamento();
-    expect(screen.getByRole("button", { name: /Genera segnalazione collegata/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Crea segnalazione collegata/i })).toBeInTheDocument();
   });
 
-  it("non mostra 'Genera segnalazione collegata' per stato bozza", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "bozza",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+  it("non mostra 'Crea segnalazione collegata' per stato bozza", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "bozza",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio("s1", creaUser({ id: "v1", ruolo: "volontario" }));
     await attendiCaricamento();
-    expect(screen.queryByRole("button", { name: /Genera segnalazione collegata/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Crea segnalazione collegata/i })).not.toBeInTheDocument();
   });
 
-  it("non mostra 'Genera segnalazione collegata' per stato chiusa_positiva", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "chiusa_positiva",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+  it("mostra 'Crea segnalazione collegata' per stato chiusa_positiva", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "chiusa_positiva",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio("s1", creaUser({ id: "v1", ruolo: "volontario" }));
     await attendiCaricamento();
-    expect(screen.queryByRole("button", { name: /Genera segnalazione collegata/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Crea segnalazione collegata/i })).toBeInTheDocument();
   });
 
   it("chiama onNuovaRecidiva con l'id al click del pulsante", async () => {
     const user = userEvent.setup();
     const onNuovaRecidiva = vi.fn();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s-rec",
-      stato: "in_attesa",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    renderDettaglio("s-rec", creaUser({ id: "u-admin", ruolo: "admin" }), { onNuovaRecidiva });
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s-rec",
+        stato: "in_attesa",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio("s-rec", creaUser({ id: "v1", ruolo: "volontario" }), { onNuovaRecidiva });
     await attendiCaricamento();
-    await user.click(screen.getByRole("button", { name: /Genera segnalazione collegata/i }));
+    await user.click(screen.getByRole("button", { name: /Crea segnalazione collegata/i }));
     expect(onNuovaRecidiva).toHaveBeenCalledWith("s-rec");
   });
 
-  it("non mostra 'Genera segnalazione collegata' per un volontario", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_attesa",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
+  it("non mostra la recidiva a chi non è proprietario, neppure se referente o admin", async () => {
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "in_attesa" }));
+    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+    await attendiCaricamento();
+    expect(screen.queryByRole("button", { name: /Crea segnalazione collegata/i })).not.toBeInTheDocument();
+  });
+
+  it("un amministratore proprietario può creare una recidiva", async () => {
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "chiusa_positiva" }));
+    renderDettaglio("s1", creaUser({ id: "v1", ruolo: "admin" }));
+    await attendiCaricamento();
+    expect(screen.getByRole("button", { name: /Crea segnalazione collegata/i })).toBeInTheDocument();
+  });
+
+  it("non mostra la recidiva per un volontario non proprietario", async () => {
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "in_attesa" }));
     renderDettaglio("s1", creaUser({ id: "u-other", ruolo: "volontario" }));
     await attendiCaricamento();
-    expect(screen.queryByRole("button", { name: /Genera segnalazione collegata/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Crea segnalazione collegata/i })).not.toBeInTheDocument();
   });
 });
 
@@ -1214,7 +1287,7 @@ describe("DettaglioSegnalazione - anteprima lettera", () => {
     mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "inviata" }));
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByRole("button", { name: /Anteprima lettera/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Anteprima lettera/i })).toBeInTheDocument();
   });
 
   it("non mostra 'Anteprima lettera' per stato bozza", async () => {
@@ -1224,51 +1297,55 @@ describe("DettaglioSegnalazione - anteprima lettera", () => {
     expect(screen.queryByRole("button", { name: /Anteprima lettera/i })).not.toBeInTheDocument();
   });
 
-  it("apre la lettera in nuova scheda via window.open al click", async () => {
-    const user = userEvent.setup();
+  it("il link Anteprima lettera apre la lettera in nuova scheda", async () => {
     mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "inviata" }));
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    await user.click(screen.getByRole("button", { name: /Anteprima lettera/i }));
-    expect(openSpy).toHaveBeenCalledWith("/api/segnalazioni/s1/lettera", "_blank");
+    const link = screen.getByRole("link", { name: /Anteprima lettera/i });
+    expect(link).toHaveAttribute("href", "/api/segnalazioni/s1/lettera");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("mostra 'Lettera con allegati' quando c'e almeno un allegato di tipo foto", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "inviata",
-      allegati: [creaAllegato({ id: "a1", tipo: "foto" })],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "inviata",
+        allegati: [creaAllegato({ id: "a1", tipo: "foto" })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByRole("button", { name: /Lettera con allegati/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Lettera con allegati/i })).toBeInTheDocument();
   });
 
   it("non mostra 'Lettera con allegati' se gli allegati non includono foto", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "inviata",
-      allegati: [creaAllegato({ id: "a1", tipo: "documento" })],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "inviata",
+        allegati: [creaAllegato({ id: "a1", tipo: "documento" })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.queryByRole("button", { name: /Lettera con allegati/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Lettera con allegati/i })).not.toBeInTheDocument();
   });
 
-  it("apre la lettera con allegati in nuova scheda (?with_attachments=1)", async () => {
-    const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "inviata",
-      allegati: [creaAllegato({ id: "a1", tipo: "foto" })],
-    }));
+  it("il link Lettera con allegati apre la versione con allegati in nuova scheda", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "inviata",
+        allegati: [creaAllegato({ id: "a1", tipo: "foto", nomeOriginale: "foto.jpg" })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    await user.click(screen.getByRole("button", { name: /Lettera con allegati/i }));
-    expect(openSpy).toHaveBeenCalledWith(
-      "/api/segnalazioni/s1/lettera?with_attachments=1",
-      "_blank"
-    );
+    const link = screen.getByRole("link", { name: /Lettera con allegati/i });
+    expect(link).toHaveAttribute("href", "/api/segnalazioni/s1/lettera?with_attachments=1");
+    expect(link).toHaveAttribute("target", "_blank");
   });
 });
 
@@ -1281,86 +1358,100 @@ describe("DettaglioSegnalazione - card Luogo", () => {
     mockCaricamentoIniziale(creaSegnalazione({ id: "s1" }));
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText("Via Test 1")).toBeInTheDocument();
+    expect(screen.getAllByText("Via Test 1").length).toBeGreaterThan(0);
     expect(screen.getByText(/Comune Test \(TT\)/i)).toBeInTheDocument();
     expect(screen.getByText("00000")).toBeInTheDocument();
-    expect(screen.getByText("REGIONE TEST")).toBeInTheDocument();
+    expect(screen.getByText("Regione Test")).toBeInTheDocument();
   });
 
   it("mostra 'n/d' per comune assente e nessuna sigla provincia", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      comune: null,
-      provincia: null,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        comune: null,
+        provincia: null,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    // Comune "n/d" senza sigla: compare in Comune e Destinatario (almeno 1)
-    expect(screen.getAllByText(/n\/d/i).length).toBeGreaterThan(0);
+    // Comune "n/d" senza sigla provincia
+    expect(screen.getByText("Comune:").parentElement).toHaveTextContent(/Comune:\s*n\/d\s*$/);
   });
 
   it("mostra 'n/d' per CAP vuoto", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      cap: "",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        cap: "",
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    // Cerca tutti gli "n/d": CAP deve essere tra questi
-    const nds = screen.getAllByText(/n\/d/i);
-    expect(nds.length).toBeGreaterThan(0);
+    expect(screen.getByText("CAP:").parentElement).toHaveTextContent(/CAP:\s*n\/d/);
   });
 
   it("mostra 'n/d' per regione assente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      regione: null,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        regione: null,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getAllByText(/n\/d/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Regione:").parentElement).toHaveTextContent(/Regione:\s*n\/d/);
   });
 
   it("mostra il nome esercizio quando presente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      nomeEsercizio: "Bar Centrale",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        nomeEsercizio: "Bar Centrale",
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText("Bar Centrale")).toBeInTheDocument();
+    expect(screen.getAllByText("Bar Centrale").length).toBeGreaterThan(0);
   });
 
   it("non mostra la riga Esercizio quando nomeEsercizio è null", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      nomeEsercizio: null,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        nomeEsercizio: null,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.queryByText("Esercizio:")).not.toBeInTheDocument();
   });
 
-  it("mostra le coordinate con link a Google Maps quando presenti", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      latitudine: 45.123456,
-      longitudine: 9.654321,
-    }));
+  it("mostra le coordinate con link a OpenStreetMap quando presenti", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        latitudine: 45.123456,
+        longitudine: 9.654321,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     const link = screen.getByRole("link", { name: /45\.123456, 9\.654321/i });
     expect(link).toBeInTheDocument();
-    expect(link.getAttribute("href")).toBe("https://www.google.com/maps?q=45.123456,9.654321");
+    expect(link.getAttribute("href")).toBe(
+      "https://www.openstreetmap.org/?mlat=45.123456&mlon=9.654321#map=17/45.123456/9.654321",
+    );
     expect(link.getAttribute("target")).toBe("_blank");
   });
 
   it("non mostra le coordinate quando latitudine o longitudine sono null", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      latitudine: null,
-      longitudine: 9.654321,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        latitudine: null,
+        longitudine: 9.654321,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.queryByText(/Coordinate:/i)).not.toBeInTheDocument();
@@ -1380,80 +1471,99 @@ describe("DettaglioSegnalazione - card Persone", () => {
   });
 
   it("mostra 'n/d' quando il volontario e assente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      volontario: undefined,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        volontario: undefined,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getAllByText(/n\/d/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Volontario segnalatore:").parentElement).toHaveTextContent(
+      /Volontario segnalatore:\s*n\/d/,
+    );
   });
 
   it("mostra il nome del referente approvatore quando presente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      referenteApprovatore: { id: "r1", nomeCognome: "Giulia Verdi" },
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        referenteApprovatore: { id: "r1", nomeCognome: "Giulia Verdi" },
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText("Giulia Verdi")).toBeInTheDocument();
   });
 
   it("non mostra la riga 'Approvata da' quando referenteApprovatore è null", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      referenteApprovatore: null,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        referenteApprovatore: null,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.queryByText("Approvata da:")).not.toBeInTheDocument();
   });
 
   it("mostra il nome del destinatario quando presente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      destinatarioNome: "Sindaco Mario",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        destinatarioNome: "Sindaco Mario",
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText("Sindaco Mario")).toBeInTheDocument();
   });
 
-  it("mostra 'n/d' per destinatario assente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      destinatarioNome: null,
-    }));
+  it("mostra 'Da completare' per destinatario assente", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        destinatarioNome: null,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getAllByText(/n\/d/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Destinatario:").parentElement).toHaveTextContent(/Destinatario:\s*Da completare/);
+    expect(screen.getByText("Da completare")).toHaveClass("text-amber-800");
   });
 
   it("mostra 'Sì, volontario' quando mittenteVisibile è true", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      mittenteVisibile: true,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        mittenteVisibile: true,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText(/Sì, volontario/i)).toBeInTheDocument();
   });
 
   it("mostra 'No, referente' quando mittenteVisibile è false", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      mittenteVisibile: false,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        mittenteVisibile: false,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText(/No, referente/i)).toBeInTheDocument();
   });
 
   it("mostra la data di invio formattata quando presente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      dataInvio: "2026-05-12T10:30:00.000Z",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        dataInvio: "2026-05-12T10:30:00.000Z",
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     // La data viene formattata con toLocaleString("it-IT"): si verifica
@@ -1463,10 +1573,12 @@ describe("DettaglioSegnalazione - card Persone", () => {
   });
 
   it("non mostra la riga 'Data invio' quando dataInvio è null", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      dataInvio: null,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        dataInvio: null,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.queryByText("Data invio:")).not.toBeInTheDocument();
@@ -1479,52 +1591,62 @@ describe("DettaglioSegnalazione - card Persone", () => {
 
 describe("DettaglioSegnalazione - card Tipologia non conformita", () => {
   it("mostra [X] per Vetro piano inclinato quando true", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkVetroPianoInclinato: true,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkVetroPianoInclinato: true,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText(/\[X\] Vetro piano inclinato/i)).toBeInTheDocument();
+    expect(screen.getByText(/Vetro piano inclinato/i).closest("li")).toHaveTextContent("(selezionato)");
   });
 
   it("mostra [ ] per Vetro piano inclinato quando false", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkVetroPianoInclinato: false,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkVetroPianoInclinato: false,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText(/\[ \] Vetro piano inclinato/i)).toBeInTheDocument();
+    expect(screen.getByText(/Vetro piano inclinato/i).closest("li")).toHaveTextContent("(non selezionato)");
   });
 
   it("mostra [X] per Vetro curvo quando true", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkVetroCurvo: true,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkVetroCurvo: true,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText(/\[X\] Vetro curvo/i)).toBeInTheDocument();
+    expect(screen.getByText(/Vetro curvo/i).closest("li")).toHaveTextContent("(selezionato)");
   });
 
   it("mostra la nota Altro tipologia quando chkAltroTipologia è true", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkAltroTipologia: true,
-      notaAltroTipologia: "Cupola illuminata",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkAltroTipologia: true,
+        notaAltroTipologia: "Cupola illuminata",
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText("Cupola illuminata")).toBeInTheDocument();
   });
 
   it("non mostra la riga Altro tipologia quando chkAltroTipologia è false", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkAltroTipologia: false,
-      notaAltroTipologia: null,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkAltroTipologia: false,
+        notaAltroTipologia: null,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     // La label "Altro:" appare solo nel ramo true
@@ -1535,52 +1657,62 @@ describe("DettaglioSegnalazione - card Tipologia non conformita", () => {
 
 describe("DettaglioSegnalazione - card Problemi riscontrati", () => {
   it("mostra [X] per Emissione luce verso l'alto quando true", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkLuceVersoAlto: true,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkLuceVersoAlto: true,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText(/\[X\] Emissione luce verso l/i)).toBeInTheDocument();
+    expect(screen.getByText(/Emissione di luce verso l/i).closest("li")).toHaveTextContent("(selezionato)");
   });
 
   it("mostra [X] per Abbagliamento quando true", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkAbbagliamento: true,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkAbbagliamento: true,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText(/\[X\] Abbagliamento/i)).toBeInTheDocument();
+    expect(screen.getByText(/Abbagliamento/i).closest("li")).toHaveTextContent("(selezionato)");
   });
 
   it("mostra [X] per Luce intrusiva quando true", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkLuceIntrusiva: true,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkLuceIntrusiva: true,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText(/\[X\] Luce intrusiva/i)).toBeInTheDocument();
+    expect(screen.getByText(/Luce intrusiva/i).closest("li")).toHaveTextContent("(selezionato)");
   });
 
   it("mostra la nota Altro problema quando chkAltroProblema è true", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkAltroProblema: true,
-      notaAltroProblema: "Lampade LED troppo potenti",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkAltroProblema: true,
+        notaAltroProblema: "Lampade LED troppo potenti",
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText("Lampade LED troppo potenti")).toBeInTheDocument();
   });
 
   it("non mostra la riga Altro problema quando chkAltroProblema è false", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      chkAltroProblema: false,
-      notaAltroProblema: null,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        chkAltroProblema: false,
+        notaAltroProblema: null,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     const altri = screen.queryAllByText(/^Altro:/i);
@@ -1589,29 +1721,33 @@ describe("DettaglioSegnalazione - card Problemi riscontrati", () => {
 });
 
 // -----------------------------------------------------------------------------
-// Descrizione libera
+// Descrizione
 // -----------------------------------------------------------------------------
 
 describe("DettaglioSegnalazione - descrizione libera", () => {
-  it("mostra la card Descrizione libera quando presente", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      descrizioneLibera: "Esempio di testo descrittivo multilinea.",
-    }));
+  it("mostra la card Descrizione quando presente", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        descrizioneLibera: "Esempio di testo descrittivo multilinea.",
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText("Esempio di testo descrittivo multilinea.")).toBeInTheDocument();
-    expect(screen.getByText("Descrizione libera")).toBeInTheDocument();
+    expect(screen.getByText("Descrizione")).toBeInTheDocument();
   });
 
-  it("non mostra la card Descrizione libera quando è null", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      descrizioneLibera: null,
-    }));
+  it("non mostra la card Descrizione quando è null", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        descrizioneLibera: null,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.queryByText("Descrizione libera")).not.toBeInTheDocument();
+    expect(screen.queryByText("Descrizione")).not.toBeInTheDocument();
   });
 });
 
@@ -1621,73 +1757,85 @@ describe("DettaglioSegnalazione - descrizione libera", () => {
 
 describe("DettaglioSegnalazione - allegati", () => {
   it("non mostra la card Allegati quando la lista e vuota", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      allegati: [],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        allegati: [],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.queryByText(/Allegati \(/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^\d+ allegat[oi]$/)).not.toBeInTheDocument();
   });
 
-  it("mostra la card Allegati con conteggio quando ce n'e uno", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      allegati: [creaAllegato({ id: "a1", nomeOriginale: "foto1.jpg" })],
-    }));
+  it("mostra la card Allegati con conteggio quando ce n'è uno", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        allegati: [creaAllegato({ id: "a1", nomeOriginale: "foto1.jpg" })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText(/Allegati \(1\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 allegato/i)).toBeInTheDocument();
     expect(screen.getByText("foto1.jpg")).toBeInTheDocument();
   });
 
   it("mostra la card Allegati con conteggio plurale quando ce ne sono due", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      allegati: [
-        creaAllegato({ id: "a1", nomeOriginale: "foto1.jpg" }),
-        creaAllegato({ id: "a2", nomeOriginale: "foto2.jpg" }),
-      ],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        allegati: [
+          creaAllegato({ id: "a1", nomeOriginale: "foto1.jpg" }),
+          creaAllegato({ id: "a2", nomeOriginale: "foto2.jpg" }),
+        ],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
-    expect(screen.getByText(/Allegati \(2\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 allegati/i)).toBeInTheDocument();
   });
 
   it("renderizza <img> per allegato di tipo foto", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      allegati: [creaAllegato({ id: "a1", tipo: "foto", nomeOriginale: "foto.jpg" })],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        allegati: [creaAllegato({ id: "a1", tipo: "foto", nomeOriginale: "foto.jpg" })],
+      }),
+    );
     const { container } = renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
-    expect(img!.getAttribute("src")).toBe("/api/allegati/a1/preview");
-    expect(img!.getAttribute("alt")).toBe("foto.jpg");
+    expect(img?.getAttribute("src")).toBe("/api/allegati/a1/preview");
+    expect(img?.getAttribute("alt")).toBe("Anteprima di foto.jpg");
   });
 
   it("renderizza icona FileText per allegato non foto (documento)", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      allegati: [creaAllegato({ id: "a1", tipo: "documento", nomeOriginale: "relazione.pdf" })],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        allegati: [creaAllegato({ id: "a1", tipo: "documento", nomeOriginale: "relazione.pdf" })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText("relazione.pdf")).toBeInTheDocument();
   });
 
   it("genera link di download verso /api/allegati/[id]/download", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      allegati: [creaAllegato({ id: "a-dl", nomeOriginale: "doc.pdf" })],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        allegati: [creaAllegato({ id: "a-dl", nomeOriginale: "doc.pdf" })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     const link = screen.getByText("doc.pdf").closest("a");
     expect(link).not.toBeNull();
-    expect(link!.getAttribute("href")).toBe("/api/allegati/a-dl/download");
-    expect(link!.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("href")).toBe("/api/allegati/a-dl/download");
+    expect(link?.getAttribute("target")).toBe("_blank");
   });
 });
 
@@ -1697,10 +1845,12 @@ describe("DettaglioSegnalazione - allegati", () => {
 
 describe("DettaglioSegnalazione - storico stati", () => {
   it("non mostra la card Storico quando la lista è vuota", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      storicoStati: [],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        storicoStati: [],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.queryByText("Storico degli stati")).not.toBeInTheDocument();
@@ -1710,28 +1860,32 @@ describe("DettaglioSegnalazione - storico stati", () => {
     // Verifica il fallback `?? []` nel render dello storico: se storicoStati
     // è undefined, la condizione `storicoStati && storicoStati.length > 0`
     // è falsa e la card non viene renderizzata.
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      storicoStati: undefined,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        storicoStati: undefined,
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.queryByText("Storico degli stati")).not.toBeInTheDocument();
   });
 
   it("mostra la card Storico con gli eventi", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      storicoStati: [
-        creaStorico({ id: "st1", statoPrecedente: null, statoNuovo: "bozza" }),
-        creaStorico({
-          id: "st2",
-          statoPrecedente: "bozza",
-          statoNuovo: "in_revisione",
-          timestamp: "2026-01-02T00:00:00.000Z",
-        }),
-      ],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        storicoStati: [
+          creaStorico({ id: "st1", statoPrecedente: null, statoNuovo: "bozza" }),
+          creaStorico({
+            id: "st2",
+            statoPrecedente: "bozza",
+            statoNuovo: "in_revisione",
+            timestamp: "2026-01-02T00:00:00.000Z",
+          }),
+        ],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText("Storico degli stati")).toBeInTheDocument();
@@ -1739,50 +1893,52 @@ describe("DettaglioSegnalazione - storico stati", () => {
     expect(screen.getByText("In revisione", { exact: false })).toBeInTheDocument();
   });
 
-  it("mostra 'n/d' e stringa vuota quando lo storico non ha user", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      storicoStati: [
-        creaStorico({ id: "st1", user: null, userId: null }),
-      ],
-    }));
+  it("mostra 'n/d' senza parentesi vuote quando lo storico non ha user", async () => {
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        storicoStati: [creaStorico({ id: "st1", user: null, userId: null })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     // La riga contiene "n/d ()": si verifica la presenza di "n/d" nella card
     const storicoCard = screen.getByText("Storico degli stati").closest('[data-slot="card"]');
     expect(storicoCard?.textContent).toContain("n/d");
-    expect(storicoCard?.textContent).toContain("()");
+    expect(storicoCard?.textContent).not.toContain("()");
   });
 
   it("mostra la nota in corsivo quando presente nello storico", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      storicoStati: [
-        creaStorico({ id: "st1", nota: "Nota di prova per lo storico" }),
-      ],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        storicoStati: [creaStorico({ id: "st1", nota: "Nota di prova per lo storico" })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText("Nota di prova per lo storico")).toBeInTheDocument();
   });
 
   it("non mostra la nota quando è null", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      storicoStati: [creaStorico({ id: "st1", nota: null })],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        storicoStati: [creaStorico({ id: "st1", nota: null })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.queryByText("Nota di prova per lo storico")).not.toBeInTheDocument();
   });
 
   it("non mostra 'statoPrecedente →' quando statoPrecedente è null", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      storicoStati: [
-        creaStorico({ id: "st1", statoPrecedente: null, statoNuovo: "bozza" }),
-      ],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        storicoStati: [creaStorico({ id: "st1", statoPrecedente: null, statoNuovo: "bozza" })],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     // L'etichetta mostra solo "Bozza" senza "→"
@@ -1792,15 +1948,17 @@ describe("DettaglioSegnalazione - storico stati", () => {
   });
 
   it("mostra ruolo utente etichettato (labelRuolo) nello storico", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      storicoStati: [
-        creaStorico({
-          id: "st1",
-          user: { id: "u1", nomeCognome: "Mario Rossi", ruolo: "referente_regionale" },
-        }),
-      ],
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        storicoStati: [
+          creaStorico({
+            id: "st1",
+            user: { id: "u1", nomeCognome: "Mario Rossi", ruolo: "referente_regionale" },
+          }),
+        ],
+      }),
+    );
     renderDettaglio("s1", creaUser());
     await attendiCaricamento();
     expect(screen.getByText(/Referente regionale/i)).toBeInTheDocument();
@@ -1813,99 +1971,129 @@ describe("DettaglioSegnalazione - storico stati", () => {
 
 describe("DettaglioSegnalazione - competenza territoriale", () => {
   it("referente_provinciale con provincia diversa NON vede i pulsanti di revisione", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_revisione",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 99, // provincia diversa
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_revisione",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 99, // provincia diversa
+      }),
+    );
     await attendiCaricamento();
     expect(screen.queryByRole("button", { name: /Approva/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Rifiuta con nota/i })).not.toBeInTheDocument();
   });
 
   it("referente_provinciale con provincia null NON vede i pulsanti (fail-closed)", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_revisione",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: null,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_revisione",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: null,
+      }),
+    );
     await attendiCaricamento();
     expect(screen.queryByRole("button", { name: /Approva/i })).not.toBeInTheDocument();
   });
 
   it("referente_provinciale con provincia uguale VEDE i pulsanti di revisione", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_revisione",
-      provinciaId: 5,
-      regioneId: 1,
-    }));
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_provinciale",
-      provinciaId: 5,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_revisione",
+        provinciaId: 5,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_provinciale",
+        provinciaId: 5,
+      }),
+    );
     await attendiCaricamento();
     expect(screen.getByRole("button", { name: /Approva/i })).toBeInTheDocument();
   });
 
   it("referente_regionale con regione uguale VEDE i pulsanti di revisione", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_revisione",
-      provinciaId: 1,
-      regioneId: 7,
-    }));
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_regionale",
-      regioneId: 7,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_revisione",
+        provinciaId: 1,
+        regioneId: 7,
+      }),
+    );
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_regionale",
+        regioneId: 7,
+      }),
+    );
     await attendiCaricamento();
     expect(screen.getByRole("button", { name: /Approva/i })).toBeInTheDocument();
   });
 
   it("referente_regionale con regione diversa NON vede i pulsanti", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_revisione",
-      provinciaId: 1,
-      regioneId: 7,
-    }));
-    renderDettaglio("s1", creaUser({
-      id: "u2",
-      ruolo: "referente_regionale",
-      regioneId: 99,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_revisione",
+        provinciaId: 1,
+        regioneId: 7,
+      }),
+    );
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u2",
+        ruolo: "referente_regionale",
+        regioneId: 99,
+      }),
+    );
     await attendiCaricamento();
     expect(screen.queryByRole("button", { name: /Approva/i })).not.toBeInTheDocument();
   });
 
   it("admin vede i pulsanti su approvata indipendentemente dalla provincia", async () => {
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "approvata",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    renderDettaglio("s1", creaUser({
-      id: "u-admin",
-      ruolo: "admin",
-      provinciaId: null,
-      regioneId: null,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "approvata",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
+    renderDettaglio(
+      "s1",
+      creaUser({
+        id: "u-admin",
+        ruolo: "admin",
+        provinciaId: null,
+        regioneId: null,
+      }),
+    );
     await attendiCaricamento();
     expect(screen.getByRole("button", { name: /Simula spedizione/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Invia PEC/i })).toBeInTheDocument();
@@ -1913,7 +2101,7 @@ describe("DettaglioSegnalazione - competenza territoriale", () => {
 });
 
 // -----------------------------------------------------------------------------
-// Modalita demo: guardDemoReadOnly blocca le azioni
+// Modalità demo: guardDemoReadOnly blocca le azioni
 // -----------------------------------------------------------------------------
 
 describe("DettaglioSegnalazione - demo mode blocca azioni mutative", () => {
@@ -1927,24 +2115,29 @@ describe("DettaglioSegnalazione - demo mode blocca azioni mutative", () => {
   it("invia in revisione in demo: toast errore demo, nessun POST", async () => {
     const user = userEvent.setup();
     setupDemoBozzaOwner();
-    // In modalita demo la carica usa getDemoSegnalazione; demo-1 e una bozza
+    // In modalità demo la carica usa getDemoSegnalazione; demo-1 è una bozza
     // del volontario demo. Per far scattare il pulsante "Invia in revisione"
     // servono isOwner + stato bozza: user.id deve essere "demo-volontario".
-    renderDettaglio("demo-1", creaUserDemo({
-      id: "demo-volontario",
-      ruolo: "volontario",
-    }));
+    renderDettaglio(
+      "demo-1",
+      creaUserDemo({
+        id: "demo-volontario",
+        ruolo: "volontario",
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia in revisione/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "demo readonly", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "demo readonly",
+          variant: "destructive",
+        }),
+      ),
     );
     // Nessun POST verso cambia-stato
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/demo-1/cambia-stato"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/demo-1/cambia-stato");
     expect(call).toBeUndefined();
   });
 
@@ -1952,30 +2145,38 @@ describe("DettaglioSegnalazione - demo mode blocca azioni mutative", () => {
     const user = userEvent.setup();
     setupDemoBozzaOwner();
     // demo-2 e in_revisione; user admin demo per avere isReviewer
-    renderDettaglio("demo-2", creaUserDemo({
-      id: "demo-admin",
-      ruolo: "admin",
-    }));
+    renderDettaglio(
+      "demo-2",
+      creaUserDemo({
+        id: "demo-admin",
+        ruolo: "admin",
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Approva/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "demo readonly", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "demo readonly",
+          variant: "destructive",
+        }),
+      ),
     );
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/demo-2/approva"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/demo-2/approva");
     expect(call).toBeUndefined();
   });
 
   it("rifiuta in demo: toast errore demo (dopo aver inserito la nota)", async () => {
     const user = userEvent.setup();
     setupDemoBozzaOwner();
-    renderDettaglio("demo-2", creaUserDemo({
-      id: "demo-admin",
-      ruolo: "admin",
-    }));
+    renderDettaglio(
+      "demo-2",
+      creaUserDemo({
+        id: "demo-admin",
+        ruolo: "admin",
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Rifiuta con nota/i }));
     const textarea = await screen.findByPlaceholderText(/Mancano le foto/i);
@@ -1983,12 +2184,14 @@ describe("DettaglioSegnalazione - demo mode blocca azioni mutative", () => {
     await user.click(screen.getByRole("button", { name: /Conferma rifiuto/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "demo readonly", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "demo readonly",
+          variant: "destructive",
+        }),
+      ),
     );
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/demo-2/rifiuta"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/demo-2/rifiuta");
     expect(call).toBeUndefined();
   });
 
@@ -1996,37 +2199,49 @@ describe("DettaglioSegnalazione - demo mode blocca azioni mutative", () => {
     const user = userEvent.setup();
     setupDemoBozzaOwner();
     // demo-3 e approvata
-    renderDettaglio("demo-3", creaUserDemo({
-      id: "demo-admin",
-      ruolo: "admin",
-    }));
+    renderDettaglio(
+      "demo-3",
+      creaUserDemo({
+        id: "demo-admin",
+        ruolo: "admin",
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Simula spedizione/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "demo readonly", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "demo readonly",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("invia PEC in demo: toast errore demo (anche se confirm true)", async () => {
+  it("invia PEC in demo: toast errore demo (anche con conferma)", async () => {
     const user = userEvent.setup();
     setupDemoBozzaOwner();
-    confirmSpy.mockReturnValue(true);
-    renderDettaglio("demo-3", creaUserDemo({
-      id: "demo-admin",
-      ruolo: "admin",
-    }));
+    renderDettaglio(
+      "demo-3",
+      creaUserDemo({
+        id: "demo-admin",
+        ruolo: "admin",
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia PEC/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Invia PEC" }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "demo readonly", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "demo readonly",
+          variant: "destructive",
+        }),
+      ),
     );
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/demo-3/invia-pec"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/demo-3/invia-pec");
     expect(call).toBeUndefined();
   });
 
@@ -2034,39 +2249,51 @@ describe("DettaglioSegnalazione - demo mode blocca azioni mutative", () => {
     const user = userEvent.setup();
     setupDemoBozzaOwner();
     // demo-4 e inviata -> ha transizioni lecite
-    renderDettaglio("demo-4", creaUserDemo({
-      id: "demo-admin",
-      ruolo: "admin",
-    }));
+    renderDettaglio(
+      "demo-4",
+      creaUserDemo({
+        id: "demo-admin",
+        ruolo: "admin",
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Cambia stato/i }));
     const conferma = await screen.findByRole("button", { name: /^Conferma$/i });
     await user.click(conferma);
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "demo readonly", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "demo readonly",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("elimina bozza in demo: toast errore demo (anche se confirm true)", async () => {
+  it("elimina bozza in demo: toast errore demo (anche con conferma)", async () => {
     const user = userEvent.setup();
     setupDemoBozzaOwner();
-    confirmSpy.mockReturnValue(true);
-    renderDettaglio("demo-1", creaUserDemo({
-      id: "demo-volontario",
-      ruolo: "volontario",
-    }));
+    renderDettaglio(
+      "demo-1",
+      creaUserDemo({
+        id: "demo-volontario",
+        ruolo: "volontario",
+      }),
+    );
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Elimina bozza/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Elimina bozza" }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "demo readonly", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "demo readonly",
+          variant: "destructive",
+        }),
+      ),
     );
-    const call = mockFetch.mock.calls.find(
-      (c) => c[0] === "/api/segnalazioni/demo-1" && c[1]?.method === "DELETE"
-    );
+    const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/demo-1" && c[1]?.method === "DELETE");
     expect(call).toBeUndefined();
   });
 });
@@ -2078,14 +2305,20 @@ describe("DettaglioSegnalazione - demo mode blocca azioni mutative", () => {
 describe("DettaglioSegnalazione - azioneInCorso disabilita i pulsanti", () => {
   it("durante invia in revisione i pulsanti azione restano disabilitati finché la fetch non completa", async () => {
     const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "bozza",
-      volontarioId: "u1",
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "bozza",
+        volontarioId: "u1",
+      }),
+    );
     // POST cambia-stato mai risolta: tiene azioneInCorso=true
     let resolvePost: (v: unknown) => void = () => {};
-    mockFetch.mockReturnValueOnce(new Promise((r) => { resolvePost = r; }));
+    mockFetch.mockReturnValueOnce(
+      new Promise((r) => {
+        resolvePost = r;
+      }),
+    );
     renderDettaglio("s1", creaUser({ id: "u1" }));
     await attendiCaricamento();
     const btn = screen.getByRole("button", { name: /Invia in revisione/i });
@@ -2111,65 +2344,79 @@ describe("DettaglioSegnalazione - anteprima lettera in demo", () => {
     isDemoMock.mockReturnValue(true);
     renderDettaglio("demo-2", creaUserDemo({ ruolo: "volontario" }));
     await attendiCaricamento();
-    expect(screen.getByRole("button", { name: /Anteprima lettera/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Anteprima lettera/i })).toBeInTheDocument();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
 // -----------------------------------------------------------------------------
-// Catch block con valore non-Error: copre il ramo `e instanceof Error ? e.message : ""`
+// Catch block con valore non-Error: copre il ramo in cui il messaggio non e disponibile
 // Per ogni funzione mutativa (inviaInRevisione, approva, confermaRifiuto,
 // simulaPec, inviaPecReale, cambiaStato, eliminaBozza) si simula un fetch
 // che lancia una stringa (non un'istanza di Error): il catch deve popolare
-// la description del toast con stringa vuota.
+// il messaggio generico nel toast.
 // -----------------------------------------------------------------------------
-describe("DettaglioSegnalazione - catch con valore non-Error (description vuota)", () => {
-  it("invia in revisione: fetch lancia non-Error, description vuota", async () => {
+describe("DettaglioSegnalazione - catch con valore non-Error (messaggio generico)", () => {
+  it("invia in revisione: fetch lancia non-Error, messaggio generico", async () => {
     const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "bozza",
-      volontarioId: "u1",
-    }));
-    // Il catch riceve una stringa (non Error): description = ""
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "bozza",
+        volontarioId: "u1",
+      }),
+    );
+    // Il catch riceve una stringa (non Error): si mostra il messaggio generico
     mockFetch.mockRejectedValueOnce("errore di rete stringa");
     renderDettaglio("s1", creaUser({ id: "u1" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia in revisione/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("approva: fetch lancia non-Error, description vuota", async () => {
+  it("approva: fetch lancia non-Error, messaggio generico", async () => {
     const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_revisione",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_revisione",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
     mockFetch.mockRejectedValueOnce("errore di rete stringa");
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Approva/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("confermaRifiuto: fetch lancia non-Error, description vuota", async () => {
+  it("confermaRifiuto: fetch lancia non-Error, messaggio generico", async () => {
     const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_revisione",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_revisione",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
     mockFetch.mockRejectedValueOnce("errore di rete stringa");
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
@@ -2179,58 +2426,76 @@ describe("DettaglioSegnalazione - catch con valore non-Error (description vuota)
     await user.click(screen.getByRole("button", { name: /Conferma rifiuto/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("simulaPec: fetch lancia non-Error, description vuota", async () => {
+  it("simulaPec: fetch lancia non-Error, messaggio generico", async () => {
     const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "approvata",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "approvata",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
     mockFetch.mockRejectedValueOnce("errore di rete stringa");
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Simula spedizione/i }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("inviaPecReale: fetch lancia non-Error, description vuota", async () => {
+  it("inviaPecReale: fetch lancia non-Error, messaggio generico", async () => {
     const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "approvata",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
-    confirmSpy.mockReturnValue(true);
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "approvata",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
     mockFetch.mockRejectedValueOnce("errore di rete stringa");
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Invia PEC/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Invia PEC" }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("cambiaStato: fetch lancia non-Error, description vuota", async () => {
+  it("cambiaStato: fetch lancia non-Error, messaggio generico", async () => {
     const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_attesa",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_attesa",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
     mockFetch.mockRejectedValueOnce("errore di rete stringa");
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
@@ -2239,27 +2504,37 @@ describe("DettaglioSegnalazione - catch con valore non-Error (description vuota)
     await user.click(conferma);
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 
-  it("eliminaBozza: fetch lancia non-Error, description vuota", async () => {
+  it("eliminaBozza: fetch lancia non-Error, messaggio generico", async () => {
     const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "bozza",
-      volontarioId: "u1",
-    }));
-    confirmSpy.mockReturnValue(true);
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "bozza",
+        volontarioId: "u1",
+      }),
+    );
     mockFetch.mockRejectedValueOnce("errore di rete stringa");
     renderDettaglio("s1", creaUser({ id: "u1" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Elimina bozza/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Elimina bozza" }));
     await waitFor(() =>
       expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Errore", description: "", variant: "destructive" })
-      )
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
     );
   });
 });
@@ -2270,12 +2545,14 @@ describe("DettaglioSegnalazione - catch con valore non-Error (description vuota)
 describe("DettaglioSegnalazione - Select cambio stato manuale (onValueChange)", () => {
   it("cambia lo stato selezionato nel dialog tramite il Select", async () => {
     const user = userEvent.setup();
-    mockCaricamentoIniziale(creaSegnalazione({
-      id: "s1",
-      stato: "in_attesa",
-      provinciaId: 1,
-      regioneId: 1,
-    }));
+    mockCaricamentoIniziale(
+      creaSegnalazione({
+        id: "s1",
+        stato: "in_attesa",
+        provinciaId: 1,
+        regioneId: 1,
+      }),
+    );
     renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
     await attendiCaricamento();
     await user.click(screen.getByRole("button", { name: /Cambia stato/i }));
@@ -2285,30 +2562,28 @@ describe("DettaglioSegnalazione - Select cambio stato manuale (onValueChange)", 
     // in_attesa -> ["chiusa_positiva", "chiusa_negativa", "inviata"]
     // Il default è "chiusa_positiva"; selezioniamo "chiusa_negativa".
     // Si usa findByRole("option") per evitare ambiguità con il testo
-    // "Chiusa negativa" presente anche nella DialogDescription.
-    const opzione = await screen.findByRole("option", { name: "Chiusa negativa" });
+    // "Chiusa con esito negativo" presente anche nella DialogDescription.
+    const opzione = await screen.findByRole("option", { name: "Chiusa con esito negativo" });
     await user.click(opzione);
-    // Il trigger del Select mostra ora "Chiusa negativa"
-    expect(trigger).toHaveTextContent("Chiusa negativa");
+    // Il trigger del Select mostra ora "Chiusa con esito negativo"
+    expect(trigger).toHaveTextContent("Chiusa con esito negativo");
     // Conferma: la POST usa lo stato selezionato
     mockFetch.mockResolvedValueOnce(okResponse({ ok: true }));
-    mockFetch.mockResolvedValueOnce(okResponse({ segnalazione: creaSegnalazione({ id: "s1", stato: "chiusa_negativa" }) }));
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ segnalazione: creaSegnalazione({ id: "s1", stato: "chiusa_negativa" }) }),
+    );
     await user.click(screen.getByRole("button", { name: /^Conferma$/i }));
     await waitFor(() => {
-      const call = mockFetch.mock.calls.find(
-        (c) => c[0] === "/api/segnalazioni/s1/cambia-stato"
-      );
+      const call = mockFetch.mock.calls.find((c) => c[0] === "/api/segnalazioni/s1/cambia-stato");
       expect(call).toBeDefined();
-      expect(JSON.parse(call![1].body)).toEqual({ stato: "chiusa_negativa", nota: null });
+      expect(JSON.parse(call?.[1].body)).toEqual({ stato: "chiusa_negativa", nota: null });
     });
   });
 
   it("cambio stato: stato non nella matrice TRANSIZIONI_LECITE non mostra opzioni (ramo ?? [])", async () => {
     // Crea una segnalazione con uno stato non standard per triggerare il
     // fallback ?? [] di TRANSIZIONI_LECITE[segnalazione.stato]
-    mockCaricamentoIniziale(
-      creaSegnalazione({ id: "s-weird", stato: "stato_inesistente" as any })
-    );
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s-weird", stato: "stato_inesistente" as never }));
     // Usa admin con id="v1" (matcha volontarioId) per evitare problemi
     renderDettaglio("s-weird", creaUser({ ruolo: "admin", id: "v1" }));
     await attendiCaricamento();
@@ -2327,12 +2602,215 @@ describe("DettaglioSegnalazione - Select cambio stato manuale (onValueChange)", 
           creaStorico({ id: "st1", statoPrecedente: "inviata", statoNuovo: "in_attesa" }),
           creaStorico({ id: "st2", statoPrecedente: null, statoNuovo: null, nota: "Anonimizzazione GDPR" }),
         ],
-      })
+      }),
     );
     renderDettaglio("s-gdpr", creaUser({ ruolo: "admin" }));
     await attendiCaricamento();
 
     // Il secondo evento (statoNuovo null) deve mostrare "Evento di sistema"
     expect(screen.getByText("Evento di sistema")).toBeInTheDocument();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Errori delle azioni con risposta non OK e corpo JSON non leggibile
+// (ramo `.catch(() => ({}))` di ogni azione e messaggio di errore generico)
+// -----------------------------------------------------------------------------
+function rispostaRotta(): Response {
+  return {
+    ok: false,
+    status: 500,
+    json: async () => {
+      throw new Error("corpo non JSON");
+    },
+    text: async () => "",
+  } as unknown as Response;
+}
+
+describe("DettaglioSegnalazione - errori delle azioni", () => {
+  it("Invia in revisione: errore con corpo non JSON mostra il messaggio generico", async () => {
+    const user = userEvent.setup();
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "bozza", volontarioId: "u1" }));
+    mockFetch.mockResolvedValueOnce(rispostaRotta());
+    renderDettaglio("s1", creaUser({ id: "u1" }));
+    await attendiCaricamento();
+    await user.click(screen.getByRole("button", { name: /Invia in revisione/i }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
+    );
+  });
+
+  it("Elimina bozza: errore con corpo non JSON mostra il messaggio generico", async () => {
+    const user = userEvent.setup();
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "bozza", volontarioId: "u1" }));
+    mockFetch.mockResolvedValueOnce(rispostaRotta());
+    renderDettaglio("s1", creaUser({ id: "u1" }));
+    await attendiCaricamento();
+    await user.click(screen.getByRole("button", { name: /Elimina bozza/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Elimina bozza" }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
+    );
+  });
+
+  it("Approva: errore con corpo non JSON mostra il messaggio generico", async () => {
+    const user = userEvent.setup();
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "in_revisione", volontarioId: "v1" }));
+    mockFetch.mockResolvedValueOnce(rispostaRotta());
+    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+    await attendiCaricamento();
+    await user.click(screen.getByRole("button", { name: /^Approva$/i }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
+    );
+  });
+
+  it("Conferma rifiuto: errore con corpo non JSON mostra il messaggio generico", async () => {
+    const user = userEvent.setup();
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "in_revisione", volontarioId: "v1" }));
+    mockFetch.mockResolvedValueOnce(rispostaRotta());
+    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+    await attendiCaricamento();
+    await user.click(screen.getByRole("button", { name: /Rifiuta con nota/i }));
+    await user.type(screen.getByRole("textbox"), "Motivo del rifiuto");
+    await user.click(screen.getByRole("button", { name: /Conferma rifiuto/i }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
+    );
+  });
+
+  it("Simula spedizione: errore con corpo non JSON mostra il messaggio generico", async () => {
+    const user = userEvent.setup();
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "approvata", volontarioId: "v1" }));
+    mockFetch.mockResolvedValueOnce(rispostaRotta());
+    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+    await attendiCaricamento();
+    await user.click(screen.getByRole("button", { name: /Simula spedizione/i }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
+    );
+  });
+
+  it("Invia PEC: errore con corpo non JSON mostra il messaggio generico", async () => {
+    const user = userEvent.setup();
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "approvata", volontarioId: "v1" }));
+    mockFetch.mockResolvedValueOnce(rispostaRotta());
+    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+    await attendiCaricamento();
+    await user.click(screen.getByRole("button", { name: /^Invia PEC$/i }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Invia PEC" }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
+    );
+  });
+
+  it("Cambia stato: errore con corpo non JSON mostra il messaggio generico", async () => {
+    const user = userEvent.setup();
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "approvata", volontarioId: "v1" }));
+    mockFetch.mockResolvedValueOnce(rispostaRotta());
+    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+    await attendiCaricamento();
+    await user.click(screen.getByRole("button", { name: /Cambia stato/i }));
+    await user.click(screen.getByRole("button", { name: /^Conferma$/i }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Operazione non riuscita",
+          description: "Operazione non riuscita. Riprova tra qualche istante.",
+          variant: "destructive",
+        }),
+      ),
+    );
+  });
+});
+
+describe("DettaglioSegnalazione - risposte del server e casi limite", () => {
+  it("risposta 404 mostra 'Segnalazione non trovata.'", async () => {
+    mockFetch.mockResolvedValueOnce({ status: 404, ok: false, json: async () => ({}) } as unknown as Response);
+    renderDettaglio("s404", creaUser());
+    expect(await screen.findByText("Segnalazione non trovata.")).toBeInTheDocument();
+  });
+
+  it("risposta 500 mostra l'errore di caricamento", async () => {
+    mockFetch.mockResolvedValueOnce({ status: 500, ok: false, json: async () => ({}) } as unknown as Response);
+    renderDettaglio("s500", creaUser());
+    expect(await screen.findByText("Impossibile caricare la segnalazione")).toBeInTheDocument();
+  });
+
+  it("simulazione con messaggio e protocollo non validi usa i testi di ripiego", async () => {
+    const user = userEvent.setup();
+    mockCaricamentoIniziale(
+      creaSegnalazione({ id: "s1", stato: "approvata", volontarioId: "v1", provinciaId: 1, regioneId: 1 }),
+    );
+    mockFetch.mockResolvedValueOnce(
+      okResponse({ ok: true, emailInviata: false, messaggio: 5, numeroProtocollo: null }),
+    );
+    renderDettaglio("s1", creaUser({ id: "u-admin", ruolo: "admin" }));
+    await attendiCaricamento();
+    await user.click(screen.getByRole("button", { name: /Simula spedizione/i }));
+    await waitFor(() =>
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Simulazione registrata", description: "Simulazione completata" }),
+      ),
+    );
+  });
+
+  it("Escape chiude il dialog di conferma senza eliminare", async () => {
+    const user = userEvent.setup();
+    mockCaricamentoIniziale(creaSegnalazione({ id: "s1", stato: "bozza", volontarioId: "u1" }));
+    renderDettaglio("s1", creaUser({ id: "u1" }));
+    await attendiCaricamento();
+    await user.click(screen.getByRole("button", { name: /Elimina bozza/i }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(mockFetch.mock.calls.some((c) => (c[1] as RequestInit | undefined)?.method === "DELETE")).toBe(false);
+  });
+});
+
+describe("DettaglioSegnalazione - allegati assenti", () => {
+  it("una segnalazione senza campo allegati si mostra senza errori", async () => {
+    mockCaricamentoIniziale({
+      ...creaSegnalazione({ id: "s1", stato: "bozza", volontarioId: "u1" }),
+      allegati: undefined,
+    } as never);
+    renderDettaglio("s1", creaUser({ id: "u1", ruolo: "volontario" }));
+    await attendiCaricamento();
+    expect(screen.getByRole("button", { name: /Modifica/i })).toBeInTheDocument();
   });
 });

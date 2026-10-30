@@ -1,37 +1,28 @@
 /**
- * Path traversal protection centralizzata per gli allegati.
+ * Protezione da path traversal per gli allegati.
  *
- * Storicamente ogni route che manipola file in storage/uploads/ implementava
- * la propria validazione, con un livello di difesa incoerente:
- *  - download/route.ts, preview/route.ts, allegati DELETE, gdpr.ts:
- *    check completo (regex `..`, separatori `/` `\`, e startsWith)
- *  - lettera/route.ts: solo check `..` (manca startsWith e separatori)
- *  - invia-pec/route.ts: nessun check esplicito
- *  - upload/route.ts: solo commento "non serve perché è un CUID" ma nessuna
- *    validazione reale di formato
- *
- * Questo modulo centralizza le difese contro path traversal (validazione
- * segmenti + resolve normalizzato) e le espone come un'unica funzione
- * `risolviPathAllegatoSicuro` che ogni route può riutilizzare. Il risultato
- * è una sola fonte di verità per la sicurezza dei path su filesystem,
- * coerente con quanto dichiarato in SECURITY.md.
+ * Tutte le route che leggono, scrivono o eliminano file in storage/uploads/
+ * usano le stesse funzioni di questo modulo: validazione dei segmenti del
+ * percorso (niente `..`, separatori, caratteri di controllo), risoluzione
+ * normalizzata e verifica che il risultato resti dentro UPLOADS_ROOT.
  *
  * Autore: Fabio Tempera (2026)
  */
 import path from "path";
+import { lstat } from "node:fs/promises";
 
 /**
- * Radice assoluta del storage degli allegati.
- * Può essere overridden tramite STORAGE_ROOT env var per deployment
- * dove il storage è montato su un percorso diverso da process.cwd()/storage.
+ * Radice assoluta dello storage degli allegati.
+ * Può essere sovrascritta tramite la variabile STORAGE_ROOT, per i deployment
+ * in cui lo storage è montato su un percorso diverso da process.cwd()/storage.
  */
 export const UPLOADS_ROOT = path.resolve(
-  process.env.STORAGE_ROOT ?? path.join(process.cwd(), "storage", "uploads")
+  process.env.STORAGE_ROOT ?? path.join(/* turbopackIgnore: true */ process.cwd(), "storage", "uploads"),
 );
 
 /**
- * Pattern CUID (cuid v2): usato da Prisma come default @id.
- * CUID v2 genera stringhe di 24 caratteri lowercase che iniziano con 'c'.
+ * Pattern CUID: Prisma usa @default(cuid()), con identificativi di
+ * 25 caratteri che iniziano con 'c'. Non è il formato CUID2.
  * Accettiamo una tolleranza più ampia (lunghezza totale 21-31 caratteri,
  * ovvero 'c' + 20-30 caratteri alfanumerici) per compatibilità con
  * eventuali future versioni della libreria e varianti generate da altre
@@ -66,16 +57,15 @@ export function isValidCuid(value: string): boolean {
 export function isSafePathSegment(value: string): boolean {
   if (!value || typeof value !== "string") return false;
   // Blocca path traversal, separatori e riferimenti impliciti (. e ..)
-  if (/[\/\\]|\.\.|^\.$|\0/.test(value)) return false;
+  if (/[/\\]|\.\.|^\.$|\0/.test(value)) return false;
   // Blocca caratteri di controllo ASCII (0x00-0x1F e 0x7F DEL)
   if (/[\x00-\x1f\x7f]/.test(value)) return false;
   return true;
 }
 
 /**
- * Parsa un `urlStorage` (formato `<segnalazioneId>/<filename>` oppure
- * il formato legacy `api/allegatiplaceholder/<segnalazioneId>/<filename>`)
- * estrae i segmenti e li valida contro path traversal.
+ * Parsa un `urlStorage` nel formato `<segnalazioneId>/<filename>` ed estrae
+ * i segmenti, validandoli contro path traversal.
  *
  * Ritorna `{ segnalazioneId, filename }` se il formato è riconosciuto e
  * sicuro, oppure `null` se il formato non è valido o contiene segmenti
@@ -85,29 +75,15 @@ export function isSafePathSegment(value: string): boolean {
  * `a//b` in `["a","b"]` mascherando formati anomali. Verifichiamo
  * esplicitamente il numero di segmenti attesi.
  */
-export function parseUrlStorageSicuro(
-  urlStorage: string
-): { segnalazioneId: string; filename: string } | null {
+export function parseUrlStorageSicuro(urlStorage: string): { segnalazioneId: string; filename: string } | null {
   if (typeof urlStorage !== "string" || !urlStorage) return null;
   // Split senza filter: se ci sono segmenti vuoti (es. "a//b"), il
   // numero di parti non matcha e la funzione ritorna null.
   const parts = urlStorage.split("/");
   // Verifica che non ci siano segmenti vuoti (doppi slash)
   if (parts.some((p) => p.length === 0)) return null;
-  let segnalazioneId: string;
-  let filename: string;
-  if (parts.length === 2) {
-    [segnalazioneId, filename] = parts;
-  } else if (
-    parts.length === 4 &&
-    parts[0] === "api" &&
-    parts[1] === "allegatiplaceholder"
-  ) {
-    segnalazioneId = parts[2];
-    filename = parts[3];
-  } else {
-    return null;
-  }
+  if (parts.length !== 2) return null;
+  const [segnalazioneId, filename] = parts;
   if (!isSafePathSegment(segnalazioneId)) return null;
   if (!isSafePathSegment(filename)) return null;
   return { segnalazioneId, filename };
@@ -132,10 +108,7 @@ export function parseUrlStorageSicuro(
  * @param segnalazioneId ID della segnalazione (deve essere un segmento sicuro)
  * @param filename Nome del file sul filesystem (output di `randomUUID()`)
  */
-export function risolviPathAllegatoSicuro(
-  segnalazioneId: string,
-  filename: string
-): string | null {
+export function risolviPathAllegatoSicuro(segnalazioneId: string, filename: string): string | null {
   if (!isSafePathSegment(segnalazioneId)) return null;
   if (!isSafePathSegment(filename)) return null;
   const resolved = path.resolve(UPLOADS_ROOT, segnalazioneId, filename);
@@ -146,4 +119,13 @@ export function risolviPathAllegatoSicuro(
     return null;
   }
   return resolved;
+}
+
+/** Lo storage privato non ammette collegamenti simbolici nella radice, nella cartella della pratica o nel file. */
+export async function verificaPercorsoFisicoAllegato(filePath: string): Promise<void> {
+  for (const percorso of [UPLOADS_ROOT, path.dirname(filePath), filePath]) {
+    if ((await lstat(percorso)).isSymbolicLink()) {
+      throw new Error("Collegamento simbolico non ammesso nello storage degli allegati");
+    }
+  }
 }

@@ -30,20 +30,25 @@ vi.mock("@/lib/totp", () => ({
   generateTotpUri: vi.fn(() => "otpauth://totp/mock"),
 }));
 
-vi.mock("@/lib/db", () => ({
-  db: {
+vi.mock("@/lib/db", () => {
+  const mockDb = {
     user: {
       findUnique: vi.fn(),
       update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     sessione: {
       deleteMany: vi.fn(),
       create: vi.fn(),
       delete: vi.fn().mockResolvedValue({}),
     },
-    $transaction: vi.fn(async (args: unknown[]) => Promise.all(args)),
-  },
-}));
+    $transaction: vi.fn(),
+  };
+  mockDb.$transaction.mockImplementation(async (args) =>
+    typeof args === "function" ? args(mockDb) : Promise.all(args),
+  );
+  return { db: mockDb };
+});
 
 import { db } from "@/lib/db";
 import { __resetRateLimitStoreForTests } from "@/lib/rate-limit";
@@ -72,6 +77,22 @@ describe("POST /api/auth/login", () => {
     __resetRateLimitStoreForTests();
   });
 
+  it("non emette un cookie se le credenziali cambiano prima della creazione sessione", async () => {
+    vi.mocked(db.user.findUnique).mockResolvedValue({
+      id: "u1",
+      attivo: true,
+      passwordHash: "hash",
+      totpSecret: null,
+      totpVerifiedAt: null,
+    } as never);
+    mockCompare.mockResolvedValue(true);
+    vi.mocked(db.user.updateMany).mockResolvedValueOnce({ count: 0 });
+    const res = await POST(makeReq({ email: "u@t.it", password: "Password1!" }));
+    expect(res.status).toBe(401);
+    expect(res.headers.get("Set-Cookie")).toBeNull();
+    expect(db.sessione.create).not.toHaveBeenCalled();
+  });
+
   it("ritorna 400 se email o password mancanti", async () => {
     const res = await POST(makeReq({ email: "test@test.it" }));
     expect(res.status).toBe(400);
@@ -87,22 +108,40 @@ describe("POST /api/auth/login", () => {
 
   it("ritorna 401 per utente non attivo", async () => {
     vi.mocked(db.user.findUnique).mockResolvedValue({
-      id: "u1", email: "u@t.it", nomeCognome: "N", ruolo: "volontario",
-      provinciaId: null, regioneId: null, inizialiProtocollo: null,
-      pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
-      attivo: false, passwordHash: "hash",
-    } as any);
+      id: "u1",
+      email: "u@t.it",
+      nomeCognome: "N",
+      ruolo: "volontario",
+      provinciaId: null,
+      regioneId: null,
+      inizialiProtocollo: null,
+      pec: null,
+      emailOrdinaria: null,
+      indirizzo: null,
+      firma: null,
+      attivo: false,
+      passwordHash: "hash",
+    } as never);
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!" }));
     expect(res.status).toBe(401);
   });
 
   it("ritorna 401 per password errata", async () => {
     vi.mocked(db.user.findUnique).mockResolvedValue({
-      id: "u1", email: "u@t.it", nomeCognome: "N", ruolo: "volontario",
-      provinciaId: null, regioneId: null, inizialiProtocollo: null,
-      pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
-      attivo: true, passwordHash: "hash",
-    } as any);
+      id: "u1",
+      email: "u@t.it",
+      nomeCognome: "N",
+      ruolo: "volontario",
+      provinciaId: null,
+      regioneId: null,
+      inizialiProtocollo: null,
+      pec: null,
+      emailOrdinaria: null,
+      indirizzo: null,
+      firma: null,
+      attivo: true,
+      passwordHash: "hash",
+    } as never);
     mockCompare.mockResolvedValue(false);
     const res = await POST(makeReq({ email: "u@t.it", password: "wrong" }));
     expect(res.status).toBe(401);
@@ -110,14 +149,23 @@ describe("POST /api/auth/login", () => {
 
   it("login riuscito ritorna 200 con user e setta cookie", async () => {
     vi.mocked(db.user.findUnique).mockResolvedValue({
-      id: "u1", email: "u@t.it", nomeCognome: "Mario", ruolo: "admin",
-      provinciaId: null, regioneId: null, inizialiProtocollo: "MR",
-      pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
-      attivo: true, passwordHash: "hash",
-    } as any);
+      id: "u1",
+      email: "u@t.it",
+      nomeCognome: "Mario",
+      ruolo: "admin",
+      provinciaId: null,
+      regioneId: null,
+      inizialiProtocollo: "MR",
+      pec: null,
+      emailOrdinaria: null,
+      indirizzo: null,
+      firma: null,
+      attivo: true,
+      passwordHash: "hash",
+    } as never);
     mockCompare.mockResolvedValue(true);
-    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 0 } as any);
-    vi.mocked(db.sessione.create).mockResolvedValue({ id: "s1", token: "tok" } as any);
+    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 0 } as never);
+    vi.mocked(db.sessione.create).mockResolvedValue({ id: "s1", token: "tok" } as never);
 
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!" }));
     expect(res.status).toBe(200);
@@ -137,42 +185,41 @@ describe("POST /api/auth/login", () => {
     expect(res.status).toBe(400);
   });
 
-  it("rate limit IP: blocca dopo 4 tentativi falliti", async () => {
+  it("rate limit IP: blocca dopo 20 tentativi falliti da uno stesso IP", async () => {
     vi.mocked(db.user.findUnique).mockResolvedValue(null);
-    // 3 tentativi permessi, al 4° blocco
-    for (let i = 0; i < 3; i++) {
+    // 20 tentativi permessi (IP condiviso da un ufficio), al 21° blocco
+    for (let i = 0; i < 20; i++) {
       const res = await POST(makeReq({ email: `test${i}@t.it`, password: "Password1!" }));
       expect(res.status).toBe(401);
     }
-    // 4° tentativo: bloccato
-    const res = await POST(makeReq({ email: "test4@t.it", password: "Password1!" }));
+    const res = await POST(makeReq({ email: "test20@t.it", password: "Password1!" }));
     expect(res.status).toBe(429);
     const json = await res.json();
     expect(json.error).toContain("indirizzo IP");
     expect(res.headers.get("Retry-After")).toBeTruthy();
   });
 
-  it("rate limit email: blocca dopo 4 tentativi con stessa email", async () => {
+  it("rate limit email: blocca il 4° tentativo con la stessa email anche da IP diversi", async () => {
     vi.mocked(db.user.findUnique).mockResolvedValue(null);
-    // Usa stessa email con IP diversi (simulati cambiando header X-Forwarded-For)
+    // Stessa email con IP reali diversi (X-Real-IP, impostato da Caddy)
     for (let i = 0; i < 3; i++) {
       const req = new NextRequest("http://localhost/api/auth/login", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "X-Forwarded-For": `1.2.3.${i}`,
+          "X-Real-IP": `1.2.3.${i}`,
         },
         body: JSON.stringify({ email: "same@t.it", password: "Password1!" }),
       });
       const res = await POST(req);
       expect(res.status).toBe(401);
     }
-    // 4° tentativo con stesso email ma IP diverso: bloccato per email
+    // 4° tentativo con stessa email ma IP diverso: bloccato per email
     const req = new NextRequest("http://localhost/api/auth/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-Forwarded-For": "9.9.9.9",
+        "X-Real-IP": "9.9.9.9",
       },
       body: JSON.stringify({ email: "same@t.it", password: "Password1!" }),
     });
@@ -204,6 +251,25 @@ describe("POST /api/auth/login - edge cases per copertura rami", () => {
     });
     const res = await POST(req);
     expect(res.status).toBe(401);
+  });
+
+  it("X-Forwarded-For falsificabile non aggira il rate limit per IP", async () => {
+    vi.mocked(db.user.findUnique).mockResolvedValue(null);
+    let ultimo = 0;
+    // Stesso IP reale (X-Real-IP), X-Forwarded-For diverso a ogni richiesta.
+    for (let i = 0; i < 21; i++) {
+      const req = new NextRequest("http://localhost/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Real-IP": "9.9.9.9",
+          "X-Forwarded-For": `10.0.0.${i}`,
+        },
+        body: JSON.stringify({ email: `utente${i}@t.it`, password: "Password1!" }),
+      });
+      ultimo = (await POST(req)).status;
+    }
+    expect(ultimo).toBe(429);
   });
 
   it("usa 'unknown' come IP quando né x-forwarded-for né x-real-ip sono presenti", async () => {
@@ -239,16 +305,10 @@ describe("POST /api/auth/login - edge cases per copertura rami", () => {
   });
 
   it("mostra messaggio 'Accesso temporaneamente bloccato' al 3° blocco (blockCount >= 3)", async () => {
-    // Simuliamo 3 blocchi consecutivi manipolando il rate limit store.
-    // Per evitare di dover aspettare 5+ min tra i blocchi, riempiamo
-    // direttamente lo store con una entry bloccata con blockCount=2 e
-    // lockedUntil già scaduto, così il prossimo tentativo incrementa a 3.
-    const { __resetRateLimitStoreForTests: _r } = await import("@/lib/rate-limit");
+    // Simulare tre blocchi reali richiederebbe di attendere i tempi di sblocco:
+    // il rate limit viene quindi sostituito con uno spy che restituisce blockCount=3.
     const rl = await import("@/lib/rate-limit");
-    _r();
-    // Iniettiamo 3 tentativi falliti per far scattare il 4° tentativo come blocco 1,
-    // poi riempiamo di nuovo per blocco 2, e infine per blocco 3.
-    // Approccio alternativo: spy su checkRateLimit per ritornare blockCount=3.
+    rl.__resetRateLimitStoreForTests();
     const spy = vi.spyOn(rl, "checkRateLimit").mockReturnValue({
       allowed: false,
       remaining: 0,
@@ -283,16 +343,26 @@ describe("POST /api/auth/login - 2FA TOTP", () => {
 
   function makeUserWithTotp(verifiedAt: Date | null = new Date()) {
     return {
-      id: "u1", email: "u@t.it", nomeCognome: "N", ruolo: "volontario",
-      provinciaId: null, regioneId: null, inizialiProtocollo: null,
-      pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
-      attivo: true, passwordHash: "hash", totpSecret: "JBSWY3DPEHPK3PXP",
+      id: "u1",
+      email: "u@t.it",
+      nomeCognome: "N",
+      ruolo: "volontario",
+      provinciaId: null,
+      regioneId: null,
+      inizialiProtocollo: null,
+      pec: null,
+      emailOrdinaria: null,
+      indirizzo: null,
+      firma: null,
+      attivo: true,
+      passwordHash: "hash",
+      totpSecret: "JBSWY3DPEHPK3PXP",
       totpVerifiedAt: verifiedAt,
-    } as any;
+    };
   }
 
   it("richiede 2FA (requiresTotp=true) se utente ha totpSecret E totpVerifiedAt", async () => {
-    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp());
+    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp() as never);
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!" }));
     expect(res.status).toBe(401);
     const json = await res.json();
@@ -303,16 +373,16 @@ describe("POST /api/auth/login - 2FA TOTP", () => {
   it("NON richiede 2FA se totpSecret presente ma totpVerifiedAt null (setup non completato)", async () => {
     // Anti-lockout: l'utente ha avviato il setup ma non ha completato verify.
     // Il login deve riuscire senza TOTP per non bloccare l'utente.
-    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp(null));
-    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 0 } as any);
-    vi.mocked(db.sessione.create).mockResolvedValue({ id: "s1", token: "tok" } as any);
+    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp(null) as never);
+    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 0 } as never);
+    vi.mocked(db.sessione.create).mockResolvedValue({ id: "s1", token: "tok" } as never);
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!" }));
     expect(res.status).toBe(200);
     expect(mockVerifyTotp).not.toHaveBeenCalled();
   });
 
   it("respinge totpToken non di 6 cifre", async () => {
-    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp());
+    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp() as never);
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!", totpToken: "abc" }));
     expect(res.status).toBe(401);
     const json = await res.json();
@@ -321,19 +391,19 @@ describe("POST /api/auth/login - 2FA TOTP", () => {
   });
 
   it("respinge totpToken di lunghezza errata (5 cifre)", async () => {
-    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp());
+    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp() as never);
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!", totpToken: "12345" }));
     expect(res.status).toBe(401);
   });
 
   it("respinge totpToken di lunghezza errata (7 cifre)", async () => {
-    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp());
+    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp() as never);
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!", totpToken: "1234567" }));
     expect(res.status).toBe(401);
   });
 
   it("respinge totpToken ben formattato ma non valido (verifyTotp=false)", async () => {
-    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp());
+    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp() as never);
     mockVerifyTotp.mockReturnValue(false);
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!", totpToken: "123456" }));
     expect(res.status).toBe(401);
@@ -343,10 +413,10 @@ describe("POST /api/auth/login - 2FA TOTP", () => {
   });
 
   it("login riuscito con totpToken valido (verifyTotp=true)", async () => {
-    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp());
+    vi.mocked(db.user.findUnique).mockResolvedValue(makeUserWithTotp() as never);
     mockVerifyTotp.mockReturnValue(true);
-    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 0 } as any);
-    vi.mocked(db.sessione.create).mockResolvedValue({ id: "s1", token: "tok" } as any);
+    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 0 } as never);
+    vi.mocked(db.sessione.create).mockResolvedValue({ id: "s1", token: "tok" } as never);
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!", totpToken: "123456" }));
     expect(res.status).toBe(200);
     const json = await res.json();
@@ -356,9 +426,9 @@ describe("POST /api/auth/login - 2FA TOTP", () => {
 
   it("utente senza totpSecret login riuscito senza 2FA", async () => {
     const userWithoutTotp = { ...makeUserWithTotp(), totpSecret: null, totpVerifiedAt: null };
-    vi.mocked(db.user.findUnique).mockResolvedValue(userWithoutTotp);
-    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 0 } as any);
-    vi.mocked(db.sessione.create).mockResolvedValue({ id: "s1", token: "tok" } as any);
+    vi.mocked(db.user.findUnique).mockResolvedValue(userWithoutTotp as never);
+    vi.mocked(db.sessione.deleteMany).mockResolvedValue({ count: 0 } as never);
+    vi.mocked(db.sessione.create).mockResolvedValue({ id: "s1", token: "tok" } as never);
     const res = await POST(makeReq({ email: "u@t.it", password: "Password1!" }));
     expect(res.status).toBe(200);
     expect(mockVerifyTotp).not.toHaveBeenCalled();

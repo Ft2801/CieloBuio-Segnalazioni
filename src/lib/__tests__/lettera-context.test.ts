@@ -26,52 +26,95 @@ describe("buildLetteraContextFromSegnalazione", () => {
 
   it("lancia errore se regione non determinabile", async () => {
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
-      id: "s1", mittenteVisibile: true,
+      id: "s1",
+      mittenteVisibile: true,
       volontario: { nomeCognome: "Mario", indirizzo: "Via 1", pec: "m@pec.it", emailOrdinaria: null, email: "m@t.it" },
       comune: { nome: "Verdello", pecComune: "p@pec.it", nomeSindaco: "Sindaco" },
       provincia: { sigla: "BG", regione: null },
       regione: null,
       dataSegnalazione: new Date(2026, 0, 15),
-      indirizzoVia: "Via 1", cap: "24040",
-      numeroProtocollo: "P1", oggettoPec: "Oggetto",
+      indirizzoVia: "Via 1",
+      cap: "24049",
+      numeroProtocollo: "P1",
+      oggettoPec: "Oggetto",
       testoIntroduttivoPec: "Intro",
-      chkVetroPianoInclinato: true, chkVetroCurvo: false, chkAltroTipologia: false,
+      chkVetroPianoInclinato: true,
+      chkVetroCurvo: false,
+      chkAltroTipologia: false,
       notaAltroTipologia: null,
-      chkLuceVersoAlto: false, chkAbbagliamento: false, chkLuceIntrusiva: false,
-      chkAltroProblema: false, notaAltroProblema: null,
+      chkLuceVersoAlto: false,
+      chkAbbagliamento: false,
+      chkLuceIntrusiva: false,
+      chkAltroProblema: false,
+      notaAltroProblema: null,
       descrizioneLibera: null,
       destinatarioNome: "Sindaco",
       includiArpa: false,
-    } as any);
+    } as never);
 
     await expect(buildLetteraContextFromSegnalazione("s1")).rejects.toThrow("Regione non determinabile");
   });
 
   it("costruisce il context correttamente con mittenteVisibile=true", async () => {
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
-      id: "s1", mittenteVisibile: true,
-      volontario: { nomeCognome: "Mario Rossi", indirizzo: "Via Roma 1", pec: "mario@pec.it", emailOrdinaria: "m@t.it", email: "m@t.it" },
+      id: "s1",
+      mittenteVisibile: true,
+      volontario: {
+        nomeCognome: "Mario Rossi",
+        indirizzo: "Via Roma 1",
+        pec: "mario@pec.it",
+        emailOrdinaria: "m@t.it",
+        email: "m@t.it",
+      },
       comune: { nome: "Verdello", pecComune: "protocollo@pec.it", nomeSindaco: "Sindaco Test" },
-      provincia: { sigla: "BG", regione: { regione: "LOMBARDIA", riferimentoLegge: "L.R. 31/15", titoloLegge: "Titolo",
-        testoProgettoIlluminotecnico: "art 5", testoDeroghe: "art 5.4", testoDatiFotometrici: "art 5b",
-        testoApprovazione: "art 6", testoInstallazione: "art 7", testoControllo: "art 10",
-        testoSanzioni: "art 13", pecArpaRegionale: "arpa@pec.it" } },
-      regione: { regione: "LOMBARDIA", riferimentoLegge: "L.R. 31/15", titoloLegge: "Titolo",
-        testoProgettoIlluminotecnico: "art 5", testoDeroghe: "art 5.4", testoDatiFotometrici: "art 5b",
-        testoApprovazione: "art 6", testoInstallazione: "art 7", testoControllo: "art 10",
-        testoSanzioni: "art 13", pecArpaRegionale: "arpa@pec.it" },
+      provincia: {
+        sigla: "BG",
+        regione: {
+          regione: "LOMBARDIA",
+          riferimentoLegge: "L.R. 31/15",
+          titoloLegge: "Titolo",
+          testoProgettoIlluminotecnico: "art 5",
+          testoDeroghe: "art 5.4",
+          testoDatiFotometrici: "art 5b",
+          testoApprovazione: "art 6",
+          testoInstallazione: "art 7",
+          testoControllo: "art 10",
+          testoSanzioni: "art 13",
+          pecArpaRegionale: "arpa@pec.it",
+        },
+      },
+      regione: {
+        regione: "LOMBARDIA",
+        riferimentoLegge: "L.R. 31/15",
+        titoloLegge: "Titolo",
+        testoProgettoIlluminotecnico: "art 5",
+        testoDeroghe: "art 5.4",
+        testoDatiFotometrici: "art 5b",
+        testoApprovazione: "art 6",
+        testoInstallazione: "art 7",
+        testoControllo: "art 10",
+        testoSanzioni: "art 13",
+        pecArpaRegionale: "arpa@pec.it",
+      },
       dataSegnalazione: new Date(2026, 0, 15),
-      indirizzoVia: "Via Tigli 5", cap: "24040",
-      numeroProtocollo: "20260115-LOM-BG-MR01", oggettoPec: "Oggetto PEC",
+      indirizzoVia: "Via Tigli 5",
+      cap: "24049",
+      numeroProtocollo: "20260115-LOM-BG-MR01",
+      oggettoPec: "Oggetto PEC",
       testoIntroduttivoPec: "Testo introduttivo",
-      chkVetroPianoInclinato: true, chkVetroCurvo: false, chkAltroTipologia: false,
+      chkVetroPianoInclinato: true,
+      chkVetroCurvo: false,
+      chkAltroTipologia: false,
       notaAltroTipologia: null,
-      chkLuceVersoAlto: true, chkAbbagliamento: false, chkLuceIntrusiva: false,
-      chkAltroProblema: false, notaAltroProblema: null,
+      chkLuceVersoAlto: true,
+      chkAbbagliamento: false,
+      chkLuceIntrusiva: false,
+      chkAltroProblema: false,
+      notaAltroProblema: null,
       descrizioneLibera: "Descrizione",
       destinatarioNome: "Sindaco Test",
       includiArpa: true,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s1");
     expect(ctx.mittenteNome).toBe("Mario Rossi");
@@ -82,61 +125,206 @@ describe("buildLetteraContextFromSegnalazione", () => {
     expect(ctx.includiArpa).toBe(true);
   });
 
-  it("costruisce il context con mittenteVisibile=false (usa placeholder)", async () => {
+  it("costruisce il context con mittenteVisibile=false (usa il segnaposto di configurazione)", async () => {
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
-      id: "s2", mittenteVisibile: false,
+      id: "s2",
+      mittenteVisibile: false,
       volontario: { nomeCognome: "Mario", indirizzo: "Via 1", pec: null, emailOrdinaria: null, email: "m@t.it" },
       comune: { nome: "Verdello", pecComune: "p@pec.it", nomeSindaco: null },
-      provincia: { sigla: "BG", regione: { regione: "LOMBARDIA", riferimentoLegge: "L.R.",
-        titoloLegge: "T", testoProgettoIlluminotecnico: "a", testoDeroghe: "b", testoDatiFotometrici: "c",
-        testoApprovazione: "d", testoInstallazione: "e", testoControllo: "f",
-        testoSanzioni: "g", pecArpaRegionale: "a@p.it" } },
+      provincia: {
+        sigla: "BG",
+        regione: {
+          regione: "LOMBARDIA",
+          riferimentoLegge: "L.R.",
+          titoloLegge: "T",
+          testoProgettoIlluminotecnico: "a",
+          testoDeroghe: "b",
+          testoDatiFotometrici: "c",
+          testoApprovazione: "d",
+          testoInstallazione: "e",
+          testoControllo: "f",
+          testoSanzioni: "g",
+          pecArpaRegionale: "a@p.it",
+        },
+      },
       regione: null,
       dataSegnalazione: new Date(2026, 0, 15),
-      indirizzoVia: "Via 1", cap: "24040",
-      numeroProtocollo: null, oggettoPec: null,
+      indirizzoVia: "Via 1",
+      cap: "24049",
+      numeroProtocollo: null,
+      oggettoPec: null,
       testoIntroduttivoPec: null,
-      chkVetroPianoInclinato: false, chkVetroCurvo: false, chkAltroTipologia: false,
+      chkVetroPianoInclinato: false,
+      chkVetroCurvo: false,
+      chkAltroTipologia: false,
       notaAltroTipologia: null,
-      chkLuceVersoAlto: false, chkAbbagliamento: false, chkLuceIntrusiva: false,
-      chkAltroProblema: false, notaAltroProblema: null,
+      chkLuceVersoAlto: false,
+      chkAbbagliamento: false,
+      chkLuceIntrusiva: false,
+      chkAltroProblema: false,
+      notaAltroProblema: null,
       descrizioneLibera: null,
       destinatarioNome: null,
       includiArpa: false,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s2");
     expect(ctx.mittenteNome).toBe("Referente CieloBuio");
-    expect(ctx.mittenteEmail).toContain("PEC dell'associazione");
+    // Senza PEC_FROM il mittente non visibile usa il segnaposto dedicato.
+    expect(ctx.mittenteEmail).toBe("indirizzo PEC non configurato");
     expect(ctx.numeroProtocollo).toBe("(da assegnare)");
     expect(ctx.destinatarioNome).toContain("Sindaco");
   });
 
+  it("con mittenteVisibile=false usa PEC_FROM come PEC dell'associazione", async () => {
+    vi.stubEnv("PEC_FROM", "cielobuio@pec.it");
+    try {
+      vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
+        id: "s2b",
+        mittenteVisibile: false,
+        volontario: null,
+        comune: { nome: "Verdello", pecComune: "p@pec.it", nomeSindaco: null },
+        provincia: {
+          sigla: "BG",
+          regione: {
+            regione: "LOMBARDIA",
+            riferimentoLegge: "L.R.",
+            titoloLegge: "T",
+            testoProgettoIlluminotecnico: "a",
+            testoDeroghe: "b",
+            testoDatiFotometrici: "c",
+            testoApprovazione: "d",
+            testoInstallazione: "e",
+            testoControllo: "f",
+            testoSanzioni: "g",
+            pecArpaRegionale: "a@p.it",
+          },
+        },
+        regione: null,
+        dataSegnalazione: new Date(2026, 0, 15),
+        indirizzoVia: "Via 1",
+        cap: "24049",
+        numeroProtocollo: null,
+        oggettoPec: null,
+        testoIntroduttivoPec: null,
+        chkVetroPianoInclinato: false,
+        chkVetroCurvo: false,
+        chkAltroTipologia: false,
+        notaAltroTipologia: null,
+        chkLuceVersoAlto: false,
+        chkAbbagliamento: false,
+        chkLuceIntrusiva: false,
+        chkAltroProblema: false,
+        notaAltroProblema: null,
+        descrizioneLibera: null,
+        destinatarioNome: null,
+        includiArpa: false,
+      } as never);
+
+      const ctx = await buildLetteraContextFromSegnalazione("s2b");
+      expect(ctx.mittenteEmail).toBe("cielobuio@pec.it");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("gestisce cap null (es. segnalazione anonimizzata GDPR) restituendo stringa vuota", async () => {
     vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
-      id: "s3", mittenteVisibile: true,
+      id: "s3",
+      mittenteVisibile: true,
       volontario: { nomeCognome: "Mario", indirizzo: "Via 1", pec: "m@pec.it", emailOrdinaria: null, email: "m@t.it" },
       comune: { nome: "Verdello", pecComune: "p@pec.it", nomeSindaco: "Sindaco" },
-      provincia: { sigla: "BG", regione: { regione: "LOMBARDIA", riferimentoLegge: "L.R.",
-        titoloLegge: "T", testoProgettoIlluminotecnico: "a", testoDeroghe: "b", testoDatiFotometrici: "c",
-        testoApprovazione: "d", testoInstallazione: "e", testoControllo: "f",
-        testoSanzioni: "g", pecArpaRegionale: "a@p.it" } },
+      provincia: {
+        sigla: "BG",
+        regione: {
+          regione: "LOMBARDIA",
+          riferimentoLegge: "L.R.",
+          titoloLegge: "T",
+          testoProgettoIlluminotecnico: "a",
+          testoDeroghe: "b",
+          testoDatiFotometrici: "c",
+          testoApprovazione: "d",
+          testoInstallazione: "e",
+          testoControllo: "f",
+          testoSanzioni: "g",
+          pecArpaRegionale: "a@p.it",
+        },
+      },
       regione: null,
       dataSegnalazione: new Date(2026, 0, 15),
-      indirizzoVia: "[ANONIMIZZATA]", cap: null,
-      numeroProtocollo: "P3", oggettoPec: "Oggetto",
+      indirizzoVia: "[ANONIMIZZATA]",
+      cap: null,
+      numeroProtocollo: "P3",
+      oggettoPec: "Oggetto",
       testoIntroduttivoPec: null,
-      chkVetroPianoInclinato: false, chkVetroCurvo: false, chkAltroTipologia: false,
+      chkVetroPianoInclinato: false,
+      chkVetroCurvo: false,
+      chkAltroTipologia: false,
       notaAltroTipologia: null,
-      chkLuceVersoAlto: false, chkAbbagliamento: false, chkLuceIntrusiva: false,
-      chkAltroProblema: false, notaAltroProblema: null,
+      chkLuceVersoAlto: false,
+      chkAbbagliamento: false,
+      chkLuceIntrusiva: false,
+      chkAltroProblema: false,
+      notaAltroProblema: null,
       descrizioneLibera: null,
       destinatarioNome: "Sindaco",
       includiArpa: false,
-    } as any);
+    } as never);
 
     const ctx = await buildLetteraContextFromSegnalazione("s3");
     expect(ctx.cap).toBe("");
     expect(ctx.indirizzoVia).toBe("[ANONIMIZZATA]");
+  });
+});
+
+describe("buildLetteraContextFromSegnalazione - saluto al sindaco", () => {
+  it("usa 'Sindaco <nome>' quando destinatarioNome è vuoto e il comune ha il nome del sindaco", async () => {
+    const regione = {
+      regione: "LOMBARDIA",
+      riferimentoLegge: "L.R. 31/15",
+      titoloLegge: "Titolo",
+      testoProgettoIlluminotecnico: "art 5",
+      testoDeroghe: "art 5.4",
+      testoDatiFotometrici: "art 5b",
+      testoApprovazione: "art 6",
+      testoInstallazione: "art 7",
+      testoControllo: "art 10",
+      testoSanzioni: "art 13",
+      pecArpaRegionale: "arpa@pec.it",
+    };
+    vi.mocked(db.segnalazione.findUnique).mockResolvedValue({
+      id: "s1",
+      mittenteVisibile: true,
+      volontario: {
+        nomeCognome: "Mario Rossi",
+        indirizzo: "Via Roma 1",
+        pec: "mario@pec.it",
+        emailOrdinaria: null,
+        email: "m@t.it",
+      },
+      comune: { nome: "Verdello", pecComune: "protocollo@pec.it", nomeSindaco: "Bianchi" },
+      provincia: { sigla: "BG", regione },
+      regione,
+      dataSegnalazione: new Date(2026, 0, 15),
+      indirizzoVia: "Via Tigli 5",
+      cap: "24049",
+      numeroProtocollo: "20260115-LOM-BG-MR01",
+      oggettoPec: "Oggetto PEC",
+      testoIntroduttivoPec: "Testo introduttivo",
+      chkVetroPianoInclinato: true,
+      chkVetroCurvo: false,
+      chkAltroTipologia: false,
+      notaAltroTipologia: null,
+      chkLuceVersoAlto: true,
+      chkAbbagliamento: false,
+      chkLuceIntrusiva: false,
+      chkAltroProblema: false,
+      notaAltroProblema: null,
+      descrizioneLibera: "Descrizione",
+      destinatarioNome: "",
+      includiArpa: true,
+    } as never);
+    const ctx = await buildLetteraContextFromSegnalazione("s1");
+    expect(ctx.destinatarioNome).toBe("Sindaco Bianchi");
   });
 });

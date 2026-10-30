@@ -2,7 +2,7 @@
  * Test aggiuntivi per src/lib/rate-limit.ts - branch coverage
  */
 import { describe, it, expect } from "vitest";
-import { checkRateLimit, resetRateLimit } from "@/lib/rate-limit";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 describe("rate-limit edge cases", () => {
   it("entry bloccata ritorna allowed=false con retryAfterSeconds", () => {
@@ -26,18 +26,20 @@ describe("rate-limit edge cases", () => {
   });
 
   it("custom windowMs sovrascrive la finestra di osservazione", () => {
-    const key = `test-window-${Date.now()}-${Math.random()}`;
-    // Con windowMs molto piccolo (1ms), dopo 2ms la finestra scade
-    checkRateLimit(key, 100, 1); // maxAttempts=100, windowMs=1ms
-    // Aspetta che la finestra passi
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        // Dopo che la finestra è passata, dovrebbe permettere di nuovo
-        const result = checkRateLimit(key, 100, 1);
-        expect(result.allowed).toBe(true);
-        resolve();
-      }, 10);
-    });
+    // Orologio simulato: con la finestra di default (15 minuti) il secondo tentativo
+    // dopo 1 secondo conterebbe come secondo tentativo e verrebbe bloccato con maxAttempts=1.
+    // Con windowMs=1000 la finestra scade e il contatore riparte da 1.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const key = `test-window-${Date.now()}-${Math.random()}`;
+      expect(checkRateLimit(key, 1, 1000).allowed).toBe(true);
+      vi.setSystemTime(Date.now() + 1001);
+      const result = checkRateLimit(key, 1, 1000);
+      expect(result.allowed).toBe(true);
+      expect(result.remaining).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("blockCount si resetta dopo blockResetMs", () => {

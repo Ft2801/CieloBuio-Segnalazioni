@@ -32,15 +32,16 @@ describe("GET /api/auth/me", () => {
   });
 
   it("ritorna 200 con user=null se nessun cookie di sessione", async () => {
-    vi.mocked(cookies).mockResolvedValue({ get: () => undefined } as any);
+    vi.mocked(cookies).mockResolvedValue({ get: () => undefined } as never);
     const res = await GET();
     expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
     const json = await res.json();
     expect(json.user).toBeNull();
   });
 
   it("ritorna 200 con user=null se sessione non trovata", async () => {
-    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as any);
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as never);
     vi.mocked(db.sessione.findUnique).mockResolvedValue(null);
     const res = await GET();
     expect(res.status).toBe(200);
@@ -49,44 +50,86 @@ describe("GET /api/auth/me", () => {
   });
 
   it("ritorna 200 con user=null se sessione scaduta", async () => {
-    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as any);
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as never);
     vi.mocked(db.sessione.findUnique).mockResolvedValue({
       id: "s1",
       token: "tok",
       scadenza: new Date(Date.now() - 1000),
-      user: { id: "u1", email: "e@t.it", nomeCognome: "N", ruolo: "volontario", provinciaId: null, regioneId: null, inizialiProtocollo: null, pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true },
-    } as any);
-    vi.mocked(db.sessione.delete).mockResolvedValue({} as any);
+      user: {
+        id: "u1",
+        email: "e@t.it",
+        nomeCognome: "N",
+        ruolo: "volontario",
+        provinciaId: null,
+        regioneId: null,
+        inizialiProtocollo: null,
+        pec: null,
+        emailOrdinaria: null,
+        indirizzo: null,
+        firma: null,
+        attivo: true,
+      },
+    } as never);
+    vi.mocked(db.sessione.delete).mockResolvedValue({} as never);
     const res = await GET();
     expect(res.status).toBe(200);
+    expect(db.sessione.delete).toHaveBeenCalledWith({ where: { id: "s1" } });
     const json = await res.json();
     expect(json.user).toBeNull();
   });
 
   it("ritorna 200 con user=null se utente non attivo", async () => {
-    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as any);
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as never);
     vi.mocked(db.sessione.findUnique).mockResolvedValue({
       id: "s1",
       token: "tok",
       scadenza: new Date(Date.now() + 10000),
-      user: { id: "u1", email: "e@t.it", nomeCognome: "N", ruolo: "volontario", provinciaId: null, regioneId: null, inizialiProtocollo: null, pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: false },
-    } as any);
+      user: {
+        id: "u1",
+        email: "e@t.it",
+        nomeCognome: "N",
+        ruolo: "volontario",
+        provinciaId: null,
+        regioneId: null,
+        inizialiProtocollo: null,
+        pec: null,
+        emailOrdinaria: null,
+        indirizzo: null,
+        firma: null,
+        attivo: false,
+      },
+    } as never);
     const res = await GET();
     expect(res.status).toBe(200);
+    expect(db.sessione.delete).toHaveBeenCalledWith({ where: { id: "s1" } });
     const json = await res.json();
     expect(json.user).toBeNull();
   });
 
   it("ritorna i dati utente se sessione valida", async () => {
-    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as any);
+    vi.mocked(cookies).mockResolvedValue({ get: () => ({ value: "tok" }) } as never);
     vi.mocked(db.sessione.findUnique).mockResolvedValue({
       id: "s1",
       token: "tok",
       scadenza: new Date(Date.now() + 10000),
-      user: { id: "u1", email: "admin@test.it", nomeCognome: "Admin", ruolo: "admin", provinciaId: null, regioneId: null, inizialiProtocollo: "AD", pec: null, emailOrdinaria: null, indirizzo: null, firma: null, attivo: true },
-    } as any);
+      user: {
+        id: "u1",
+        email: "admin@test.it",
+        nomeCognome: "Admin",
+        ruolo: "admin",
+        provinciaId: null,
+        regioneId: null,
+        inizialiProtocollo: "AD",
+        pec: null,
+        emailOrdinaria: null,
+        indirizzo: null,
+        firma: null,
+        attivo: true,
+      },
+    } as never);
     const res = await GET();
     expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
     const json = await res.json();
     expect(json.user.email).toBe("admin@test.it");
     expect(json.user.ruolo).toBe("admin");

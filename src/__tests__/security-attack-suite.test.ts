@@ -5,11 +5,11 @@
  * di attacco principali, verificando che le difese implementate siano
  * efficaci. I test sono organizzati per categoria di attacco OWASP Top 10.
  *
- * A differenza di una suite "documentale" che si limita a verificare
- * l'esistenza di commenti, ogni test qui esegue una verifica REALE:
- * - Importa il modulo sotto test e ne invoca il comportamento
- * - Oppure legge il sorgente e verifica la presenza del pattern
- *   di sicurezza richiesto (grep su file, non commento)
+ * Ogni test importa il modulo sotto test e ne verifica il comportamento,
+ * oppure legge il sorgente e verifica la presenza del pattern di sicurezza
+ * richiesto (ispezione del codice, non dei commenti). Le ispezioni del
+ * sorgente non sostituiscono i test di comportamento presenti nelle suite
+ * di integrazione delle route (src/app/api/__tests__/).
  *
  * Categorie coperte:
  * A01: Broken Access Control (IDOR, privilege escalation, bypass autorizzazione)
@@ -46,12 +46,7 @@ import {
 } from "@/lib/validation";
 import { checkRateLimit, getBlockDuration, __resetRateLimitStoreForTests } from "@/lib/rate-limit";
 import { generaHtmlLettera } from "@/lib/lettera";
-import { generaNumeroProtocollo } from "@/lib/protocollo";
-import {
-  guardDemoReadOnly,
-  DEMO_READONLY_MESSAGE,
-  isDemoSession,
-} from "@/lib/demo-mode";
+import { guardDemoReadOnly, DEMO_READONLY_MESSAGE, isDemoSession } from "@/lib/demo-mode";
 import {
   isValidCuid,
   isSafePathSegment,
@@ -60,10 +55,7 @@ import {
   UPLOADS_ROOT,
 } from "@/lib/path-guard";
 import { generateTotpSecret, generateTotpUri, verifyTotp } from "@/lib/totp";
-import {
-  MAX_ALLEGATI_PER_SEGNALAZIONE,
-  MAX_ALLEGATO_BYTE,
-} from "@/lib/types";
+import { MAX_ALLEGATI_PER_SEGNALAZIONE, MAX_ALLEGATO_BYTE } from "@/lib/types";
 import { getRetentionAnni } from "@/lib/cron-utils";
 import { TOTP, Secret } from "otpauth";
 
@@ -83,19 +75,43 @@ function readSrc(relPath: string): string {
 
 describe("[A01] Broken Access Control - IDOR Prevention", () => {
   const volontario = {
-    id: "vol-1", email: "v@t.it", nomeCognome: "V", ruolo: "volontario" as const,
-    provinciaId: null, regioneId: null, inizialiProtocollo: null,
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
+    id: "vol-1",
+    email: "v@t.it",
+    nomeCognome: "V",
+    ruolo: "volontario" as const,
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: null,
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
   };
   const refSenzaTerritorio = {
-    id: "ref-1", email: "r@t.it", nomeCognome: "R", ruolo: "referente_provinciale" as const,
-    provinciaId: null, regioneId: null, inizialiProtocollo: null,
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
+    id: "ref-1",
+    email: "r@t.it",
+    nomeCognome: "R",
+    ruolo: "referente_provinciale" as const,
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: null,
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
   };
   const admin = {
-    id: "adm-1", email: "a@t.it", nomeCognome: "A", ruolo: "admin" as const,
-    provinciaId: null, regioneId: null, inizialiProtocollo: null,
-    pec: null, emailOrdinaria: null, indirizzo: null, firma: null,
+    id: "adm-1",
+    email: "a@t.it",
+    nomeCognome: "A",
+    ruolo: "admin" as const,
+    provinciaId: null,
+    regioneId: null,
+    inizialiProtocollo: null,
+    pec: null,
+    emailOrdinaria: null,
+    indirizzo: null,
+    firma: null,
   };
 
   it("volontario non può vedere segnalazioni di altri", () => {
@@ -107,7 +123,9 @@ describe("[A01] Broken Access Control - IDOR Prevention", () => {
   });
 
   it("referente senza territorio è fail-closed (non vede nulla)", () => {
-    expect(canViewSegnalazione(refSenzaTerritorio, { volontarioId: "vol-1", provinciaId: 5, regioneId: 1 })).toBe(false);
+    expect(canViewSegnalazione(refSenzaTerritorio, { volontarioId: "vol-1", provinciaId: 5, regioneId: 1 })).toBe(
+      false,
+    );
   });
 
   it("admin ha accesso totale", () => {
@@ -125,6 +143,10 @@ describe("[A01] Broken Access Control - IDOR Prevention", () => {
 // ============================================================
 
 describe("[A02] Cryptographic Failures - Password e Sessioni", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("hashPassword usa bcrypt con cost 12", async () => {
     const hash = await hashPassword("TestPassword1!");
     expect(hash).toMatch(/^\$2[ab]\$/);
@@ -132,7 +154,7 @@ describe("[A02] Cryptographic Failures - Password e Sessioni", () => {
     expect(cost).toBe(12);
   });
 
-  it("verifyPassword reject hash errati", async () => {
+  it("verifyPassword rifiuta hash errati", async () => {
     const result = await verifyPassword("password", "$2a$12$invalidhash");
     expect(result).toBe(false);
   });
@@ -161,25 +183,22 @@ describe("[A02] Cryptographic Failures - Password e Sessioni", () => {
 // ============================================================
 
 describe("[A03a] SQL Injection - Prisma parametrizza tutte le query", () => {
-  it("zod validazione rejecta SQL injection in email", () => {
+  it("zod validazione rifiuta SQL injection in email", () => {
     expect(emailSchema.safeParse("'; DROP TABLE users; --").success).toBe(false);
     expect(emailSchema.safeParse("admin@t.it' OR '1'='1").success).toBe(false);
   });
 
-  it("zod validazione rejecta SQL injection in password corta", () => {
+  it("zod validazione rifiuta SQL injection in password corta", () => {
     // "'; DROP--" è troppo corta (min 12) e senza maiuscole/cifre/speciali richieste
     expect(strongPasswordSchema.safeParse("'; DROP TABLE users; --").success).toBe(false);
   });
 
-  it("nessun uso di $queryRawUnsafe nel codebase (ispezione sorgente)", () => {
-    // Verifica REALE: scansione ricorsiva di tutte le route API e lib
-    // per l'uso di $queryRawUnsafe (vulnerabilità SQL injection nota)
-    const dirs = [
-      "src/app/api",
-      "src/lib",
-      "scripts",
-    ];
-    let foundUnsafe = false;
+  it("SQL dinamico consentito solo per le tre sequenze note del ripristino", () => {
+    // Le tabelle SERIAL vanno riallineate transazionalmente con ALTER SEQUENCE.
+    // La sola query dinamica usa identificativi scelti da una lista statica,
+    // mai valori della richiesta o dati del backup.
+    const dirs = ["src/app/api", "src/lib", "scripts"];
+    const sorgentiDinamiche: string[] = [];
     for (const dir of dirs) {
       const absDir = path.join(PROJECT_ROOT, dir);
       if (!fs.existsSync(absDir)) continue;
@@ -189,16 +208,16 @@ describe("[A03a] SQL Injection - Prisma parametrizza tutte le query", () => {
           if (entry.isDirectory()) walk(full);
           else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
             const content = fs.readFileSync(full, "utf-8");
-            // Esclude i file di test che mockano Prisma (contengono $queryRawUnsafe come commento)
             if (content.includes("$queryRawUnsafe") && !full.includes("__tests__")) {
-              foundUnsafe = true;
+              sorgentiDinamiche.push(path.relative(PROJECT_ROOT, full));
             }
           }
         }
       };
       walk(absDir);
     }
-    expect(foundUnsafe).toBe(false);
+    expect(sorgentiDinamiche).toEqual(["src/lib/backup.ts"]);
+    expect(readSrc("src/lib/backup.ts")).toContain('for (const tabella of ["regioni_leggi", "province", "comuni"])');
   });
 });
 
@@ -234,25 +253,27 @@ describe("[A03b] Email Header Injection - CRLF Injection Prevention", () => {
 });
 
 describe("[A03c] CSV Formula Injection", () => {
-  it("csvEscape prefissa formule con apostrofo (verifica pattern detection)", () => {
+  it("il pattern di csvEscape riconosce e prefissa le formule pericolose (ispezione sorgente + pattern)", () => {
+    const src = readSrc("src/app/api/segnalazioni/export/route.ts");
+    // csvEscape non è esportata: si verifica il pattern letterale usato dal codice.
+    expect(src).toContain("/^[\\s=+\\-@]/.test(s)");
+    const pattern = /^[\s=+\-@]/;
     const formulaAttacks = [
-      "=HYPERLINK(\"http://evil.com\",\"Click\")",
+      '=HYPERLINK("http://evil.com","Click")',
       "=cmd|'/c calc'!A1",
       "+1+1",
       "-1+1",
       "@SUM(A1:A2)",
     ];
     for (const attack of formulaAttacks) {
-      expect(/^[=+\-@]/.test(attack)).toBe(true);
+      expect(pattern.test(attack)).toBe(true);
     }
   });
 
-  it("export route contiene sanitizzazione anti CSV injection (ispezione sorgente)", () => {
+  it("export route antepone l'apostrofo alla cella e raddoppia le virgolette (ispezione sorgente)", () => {
     const src = readSrc("src/app/api/segnalazioni/export/route.ts");
-    // Verifica che il codice applichi la sanitizzazione prefissando
-    // con apostrofo i campi che iniziano con =, +, -, @
-    expect(src).toMatch(/[=+\-@]/);
-    expect(src).toMatch(/startsWith|charAt\(0\)|\.replace/);
+    expect(src).toContain("s = `'${s}`");
+    expect(src).toContain('s.replace(/"/g, \'""\')');
   });
 });
 
@@ -287,8 +308,9 @@ describe("[A04b] Business Logic - Protezione pacchetto probatorio", () => {
 
   it("volontario non può modificare segnalazioni in stato in_revisione (ispezione sorgente)", () => {
     const src = readSrc("src/app/api/segnalazioni/[id]/route.ts");
-    // Verifica REALE: isOwner && stato !== "bozza" ritorna 400
-    expect(src).toMatch(/isOwner\s*&&\s*segnalazione\.stato\s*!==\s*"bozza"/);
+    // Verifica REALE: il proprietario che non è revisore competente non può
+    // modificare fuori da stato "bozza" (ritorna 400)
+    expect(src).toMatch(/isOwner\s*&&\s*!isReviewerForThis\s*&&\s*segnalazione\.stato\s*!==\s*"bozza"/);
     expect(src).toContain("400");
   });
 
@@ -305,8 +327,9 @@ describe("[A04b] Business Logic - Protezione pacchetto probatorio", () => {
 
   it("volontario può caricare allegati solo in stato bozza (ispezione sorgente)", () => {
     const src = readSrc("src/app/api/upload/route.ts");
-    // Verifica REALE: isOwnerUpload && stato !== "bozza" ritorna 400
-    expect(src).toMatch(/isOwnerUpload\s*&&\s*segnalazione\.stato\s*!==\s*"bozza"/);
+    // Un volontario non può caricare fuori dalla bozza, né prima né dopo il lock.
+    expect(src).toMatch(/user\.ruolo === "volontario"\s*&&\s*segnalazione\.stato\s*!==\s*"bozza"/);
+    expect(src).toMatch(/user\.ruolo === "volontario"\s*&&\s*corrente\.stato\s*!==\s*"bozza"/);
   });
 });
 
@@ -338,9 +361,9 @@ describe("[A05a] Security Headers", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://example.com");
     vi.resetModules();
-    const { middleware } = await import("@/middleware");
+    const { proxy } = await import("@/proxy");
     const req = new NextRequest("https://example.com/api/test", { method: "GET" });
-    const res = await middleware(req);
+    const res = await proxy(req);
     const csp = res.headers.get("Content-Security-Policy") ?? "";
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("script-src 'self'");
@@ -353,8 +376,8 @@ describe("[A05a] Security Headers", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://example.com");
     vi.resetModules();
-    const { middleware } = await import("@/middleware");
-    const res = await middleware(new NextRequest("https://example.com/"));
+    const { proxy } = await import("@/proxy");
+    const res = await proxy(new NextRequest("https://example.com/"));
     expect(res.headers.get("Strict-Transport-Security")).toContain("max-age=63072000");
     expect(res.headers.get("Strict-Transport-Security")).toContain("includeSubDomains");
     vi.unstubAllEnvs();
@@ -364,8 +387,8 @@ describe("[A05a] Security Headers", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://example.com");
     vi.resetModules();
-    const { middleware } = await import("@/middleware");
-    const res = await middleware(new NextRequest("https://example.com/"));
+    const { proxy } = await import("@/proxy");
+    const res = await proxy(new NextRequest("https://example.com/"));
     expect(res.headers.get("X-Frame-Options")).toBe("DENY");
     vi.unstubAllEnvs();
   });
@@ -374,8 +397,8 @@ describe("[A05a] Security Headers", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://example.com");
     vi.resetModules();
-    const { middleware } = await import("@/middleware");
-    const res = await middleware(new NextRequest("https://example.com/"));
+    const { proxy } = await import("@/proxy");
+    const res = await proxy(new NextRequest("https://example.com/"));
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
     vi.unstubAllEnvs();
   });
@@ -411,9 +434,9 @@ describe("[A05b] CSRF - Verifica Origin/Referer", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://example.com");
     vi.resetModules();
-    const { middleware } = await import("@/middleware");
+    const { proxy } = await import("@/proxy");
     const req = new NextRequest("https://example.com/api/test", { method: "POST" });
-    const res = await middleware(req);
+    const res = await proxy(req);
     expect(res.status).toBe(403);
     vi.unstubAllEnvs();
   });
@@ -422,12 +445,12 @@ describe("[A05b] CSRF - Verifica Origin/Referer", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://example.com");
     vi.resetModules();
-    const { middleware } = await import("@/middleware");
+    const { proxy } = await import("@/proxy");
     const req = new NextRequest("https://example.com/api/test", {
       method: "POST",
       headers: { origin: "https://evil.com" },
     });
-    const res = await middleware(req);
+    const res = await proxy(req);
     expect(res.status).toBe(403);
     vi.unstubAllEnvs();
   });
@@ -436,12 +459,12 @@ describe("[A05b] CSRF - Verifica Origin/Referer", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_PUBLIC_BASE_URL", "");
     vi.resetModules();
-    const { middleware } = await import("@/middleware");
+    const { proxy } = await import("@/proxy");
     const req = new NextRequest("https://example.com/api/test", {
       method: "POST",
       headers: { origin: "https://example.com" },
     });
-    const res = await middleware(req);
+    const res = await proxy(req);
     expect(res.status).toBe(503);
     vi.unstubAllEnvs();
   });
@@ -517,11 +540,10 @@ describe("[A07b] Session Fixation - Session Rotation", () => {
 // ============================================================
 
 describe("[A08a] Path Traversal - Protezione multi-layer", () => {
-  it("path con .. viene bloccato dal check startsWith", () => {
-    // Verifica REALE: il path traversal ../../../etc/passwd non è dentro uploadsRoot
-    const uploadsRoot = path.resolve(process.cwd(), "storage", "uploads");
-    const maliciousPath = path.resolve(uploadsRoot, "../../../etc/passwd");
-    expect(maliciousPath.startsWith(uploadsRoot + path.sep)).toBe(false);
+  it("risolviPathAllegatoSicuro non produce un path per un traversal con ../", () => {
+    // Verifica del modulo reale: il traversal non deve mai arrivare a un path su disco.
+    expect(risolviPathAllegatoSicuro("cabcdefghij1234567890", "../../../etc/passwd")).toBeNull();
+    expect(risolviPathAllegatoSicuro("../../../etc", "passwd")).toBeNull();
   });
 
   it("path traversal protection a 2 livelli (validazione segmenti + resolve normalizzato) in path-guard.ts", () => {
@@ -548,20 +570,16 @@ describe("[A08a] Path Traversal - Protezione multi-layer", () => {
     expect(risolviPathAllegatoSicuro("cabcdefghij1234567890", "/etc/passwd")).toBeNull();
   });
 
-  it("parseUrlStorageSicuro reject urlStorage con path traversal (formato legacy e attuale)", () => {
+  it("parseUrlStorageSicuro accetta solo il formato attuale e rifiuta path traversal", () => {
     // Formato attuale valido
     expect(parseUrlStorageSicuro("cabcdefghij1234567890/file.jpg")).toEqual({
       segnalazioneId: "cabcdefghij1234567890",
       filename: "file.jpg",
     });
-    // Formato legacy valido
-    expect(parseUrlStorageSicuro("api/allegatiplaceholder/cabcdefghij1234567890/file.jpg")).toEqual({
-      segnalazioneId: "cabcdefghij1234567890",
-      filename: "file.jpg",
-    });
+    // Formato con prefisso non previsto: rifiutato
+    expect(parseUrlStorageSicuro("formato/non/valido/cabcdefghij1234567890/file.jpg")).toBeNull();
     // Path traversal: viene bloccato
     expect(parseUrlStorageSicuro("../etc/passwd")).toBeNull();
-    expect(parseUrlStorageSicuro("api/allegatiplaceholder/../../etc/passwd")).toBeNull();
     expect(parseUrlStorageSicuro("segid/etc/passwd")).toBeNull(); // filename con /
   });
 
@@ -579,7 +597,7 @@ describe("[A08a] Path Traversal - Protezione multi-layer", () => {
   });
 
   it("tutte le route di allegati usano path-guard centralizzato (ispezione sorgente)", () => {
-    // Verifica REALE: 5 route devono importare path-guard
+    // Verifica REALE: 6 route di allegati devono importare path-guard
     const routes = [
       "src/app/api/upload/route.ts",
       "src/app/api/allegati/[id]/download/route.ts",
@@ -674,7 +692,7 @@ describe("[A09] Audit Trail - Tracciabilità azioni", () => {
   });
 
   it("logger Pino strutturato usato al posto di console.error nelle route API (ispezione sorgente)", () => {
-    // Verifica REALE: 16 file di route API devono usare logger, non console
+    // Verifica REALE: le 8 route API principali devono usare logger, non console
     const routeFiles = [
       "src/app/api/auth/login/route.ts",
       "src/app/api/upload/route.ts",
@@ -699,10 +717,12 @@ describe("[A09] Audit Trail - Tracciabilità azioni", () => {
 // ============================================================
 
 describe("[A10] SSRF - Nessun endpoint fa richieste HTTP a URL user-controlled", () => {
-  it("nessuna route accetta URL come input per fetch server-side (ispezione sorgente)", () => {
-    // Verifica REALE: cerca l'uso di fetch() o http.get() con URL proveniente dal body
+  it("nessuna route o libreria server chiama fetch o http(s) (ispezione sorgente)", () => {
+    // Il codice server non deve effettuare richieste HTTP: l'unica uscita di rete
+    // è il transporter SMTP con host da configurazione. Le righe di commento sono escluse.
     const dirs = ["src/app/api", "src/lib"];
-    let foundSsrf = false;
+    const trovate: string[] = [];
+    const pattern = /\bfetch\s*\(|\bhttps?\.(get|request)\s*\(/;
     for (const dir of dirs) {
       const absDir = path.join(PROJECT_ROOT, dir);
       if (!fs.existsSync(absDir)) continue;
@@ -711,28 +731,28 @@ describe("[A10] SSRF - Nessun endpoint fa richieste HTTP a URL user-controlled",
           const full = path.join(d, entry.name);
           if (entry.isDirectory()) walk(full);
           else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
-            const content = fs.readFileSync(full, "utf-8");
-            // Cerca pattern pericolosi: fetch(body.url) o http.get(body.url)
-            if (
-              content.match(/\bfetch\s*\(\s*body\./) ||
-              content.match(/http\.get\s*\(\s*body\./) ||
-              content.match(/https\.get\s*\(\s*body\./)
-            ) {
-              foundSsrf = true;
+            const righe = fs.readFileSync(full, "utf-8").split("\n");
+            for (const riga of righe) {
+              if (/^\s*(\*|\/\/)/.test(riga)) continue;
+              if (pattern.test(riga)) trovate.push(full);
             }
           }
         }
       };
       walk(absDir);
     }
-    expect(foundSsrf).toBe(false);
+    expect(trovate).toEqual([]);
   });
 
   it("l'unico uso di fetch è verso nodemailer SMTP con host da env, non user input (ispezione sorgente)", () => {
-    const src = readSrc("src/app/api/segnalazioni/[id]/invia-pec/route.ts");
-    // nodemailer.createTransport usa host da process.env.PEC_SMTP_HOST
-    expect(src).toContain("process.env.PEC_SMTP_HOST");
-    expect(src).not.toMatch(/nodemailer\.createTransport\s*\(\s*\{[^}]*body\./);
+    // Il transporter SMTP è creato in src/lib/smtp.ts con host da env
+    // (PEC_SMTP_HOST), mai da dati della richiesta.
+    const smtpSrc = readSrc("src/lib/smtp.ts");
+    expect(smtpSrc).toContain("PEC_SMTP_HOST");
+    expect(smtpSrc).not.toMatch(/createTransport\s*\(\s*\{[^}]*body\./);
+    // La route invia solo tramite il transporter condiviso.
+    const routeSrc = readSrc("src/app/api/segnalazioni/[id]/invia-pec/route.ts");
+    expect(routeSrc).toContain("getTransporter(smtp)");
   });
 });
 
@@ -750,7 +770,7 @@ describe("[XSS] Cross-Site Scripting - HTML Escaping", () => {
       comuneNome: "Comune",
       pecComune: "c@pec.it",
       indirizzoVia: "Via 1",
-      cap: "24040",
+      cap: "24049",
       provinciaSigla: "BG",
       regione: "LOMBARDIA",
       riferimentoLegge: "L.R.",
@@ -773,7 +793,7 @@ describe("[XSS] Cross-Site Scripting - HTML Escaping", () => {
       chkAltroProblema: false,
       includiArpa: false,
       luogoData: "Luogo, Data",
-    } as any;
+    } as never;
     const html = generaHtmlLettera(ctx);
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain('<script>alert("XSS")</script>');
@@ -857,8 +877,8 @@ describe("[GDPR] Anonimizzazione automatica", () => {
     // dataChiusura, registrato quando lo stato transita a chiusa_*.
     const src = readSrc("src/lib/cron-utils.ts");
     expect(src).toContain("dataChiusura");
-    // Fallback su updatedAt è accettabile SOLO per segnalazioni chiuse
-    // prima dell'introduzione del campo (retrocompatibilità)
+    // Il fallback su updatedAt copre solo le segnalazioni chiuse senza
+    // dataChiusura valorizzato
     expect(src).toMatch(/OR:\s*\[/);
   });
 
@@ -951,16 +971,15 @@ describe("[TOTP] 2FA integrato nel flusso di autenticazione", () => {
 // ============================================================
 
 describe("[BACKUP] Cifratura at-rest completa (DB + allegati fisici)", () => {
-  it("backup-db.ts cifra anche gli allegati fisici, non solo i metadati DB (ispezione sorgente)", () => {
-    const src = readSrc("scripts/backup-db.ts");
-    // Verifica REALE: la funzione copyAndMaybeEncrypt cifrare ogni file
-    expect(src).toContain("copyAndMaybeEncrypt");
-    expect(src).toContain("encryptBuffer");
+  it("la libreria di backup cifra anche gli allegati fisici, non solo i metadati DB (ispezione sorgente)", () => {
+    const src = readSrc("src/lib/backup.ts");
+    expect(src).toContain("copiaAllegatiCifrati");
+    expect(src).toContain("scriviCifrato");
     expect(src).toContain(".enc");
   });
 
-  it("backup-db.ts usa AES-256-GCM con IV random e auth tag (ispezione sorgente)", () => {
-    const src = readSrc("scripts/backup-db.ts");
+  it("la libreria di backup usa AES-256-GCM con IV random e auth tag (ispezione sorgente)", () => {
+    const src = readSrc("src/lib/backup.ts");
     expect(src).toContain("aes-256-gcm");
     expect(src).toContain("randomBytes(12)"); // IV 12 byte
     expect(src).toContain("getAuthTag()");
@@ -977,5 +996,45 @@ describe("[METRICS] Endpoint /api/metrics supporta token statico per Prometheus"
     expect(src).toContain("METRICS_TOKEN");
     expect(src).toContain("Bearer");
     expect(src).toContain("timingSafeEqual"); // previene timing attack sul confronto token
+  });
+});
+
+describe("[HTTP] Politica dei codici 401 e 403 nelle route", () => {
+  // 401: sessione o credenziali mancanti o non valide (incluso il passo 2FA).
+  // 403: sessione valida ma permesso negato. Le route non devono mescolare i due casi.
+  const RE_RISPOSTA = /NextResponse\.json\(\s*\{\s*error:\s*("[^"]*"|[^,}]+)[^}]*\}\s*,\s*\{\s*status:\s*(40[13])/g;
+  const RE_AUTENTICAZIONE = /^"(Non autenticato|Credenziali non valide|Autenticazione a due fattori|Codice TOTP)/;
+
+  function fileRoute(dir: string): string[] {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((voce) => {
+      const percorso = path.join(dir, voce.name);
+      if (voce.isDirectory()) return fileRoute(percorso);
+      return voce.name === "route.ts" ? [percorso] : [];
+    });
+  }
+
+  const risposte = fileRoute(path.join(process.cwd(), "src/app/api")).flatMap((file) => {
+    const sorgente = fs.readFileSync(file, "utf-8");
+    return [...sorgente.matchAll(RE_RISPOSTA)].map((m) => ({
+      file: path.relative(process.cwd(), file),
+      messaggio: m[1],
+      stato: m[2],
+    }));
+  });
+
+  it("analizza un numero sufficiente di risposte 401 e 403", () => {
+    expect(risposte.length).toBeGreaterThanOrEqual(60);
+    expect(risposte.some((r) => r.stato === "401")).toBe(true);
+    expect(risposte.some((r) => r.stato === "403")).toBe(true);
+  });
+
+  it("le risposte 401 riguardano solo autenticazione, mai un permesso negato", () => {
+    const errate = risposte.filter((r) => r.stato === "401" && !RE_AUTENTICAZIONE.test(r.messaggio));
+    expect(errate).toEqual([]);
+  });
+
+  it("le risposte 403 non dichiarano una sessione mancante o credenziali errate", () => {
+    const errate = risposte.filter((r) => r.stato === "403" && RE_AUTENTICAZIONE.test(r.messaggio));
+    expect(errate).toEqual([]);
   });
 });

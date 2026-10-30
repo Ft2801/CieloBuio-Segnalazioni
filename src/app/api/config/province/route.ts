@@ -6,9 +6,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import { getSessionUser, canManageConfiguration } from "@/lib/auth";
 import { nuovaProvinciaSchema, validate } from "@/lib/validation";
 import { logger } from "@/lib/logger";
+import { normalizzaStringaFacoltativa, leggiBodyOggetto, normalizzaIdNumerico, parseIdIntero } from "@/lib/http";
 
 export async function GET(req: NextRequest) {
   const user = await getSessionUser();
@@ -21,12 +23,9 @@ export async function GET(req: NextRequest) {
 
   const where: Record<string, unknown> = {};
   if (regioneId) {
-    const regioneIdNum = Number(regioneId);
-    if (isNaN(regioneIdNum)) {
-      return NextResponse.json(
-        { error: "regioneId non valido" },
-        { status: 400 }
-      );
+    const regioneIdNum = parseIdIntero(regioneId);
+    if (regioneIdNum === null) {
+      return NextResponse.json({ error: "regioneId non valido" }, { status: 400 });
     }
     where.regioneId = regioneIdNum;
   }
@@ -44,20 +43,21 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const user = await getSessionUser();
-  if (!user || !canManageConfiguration(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canManageConfiguration(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const regioneIdNum = body.regioneId ? Number(body.regioneId) : null;
-  // Validazione: Number("abc") produce NaN, che non è un ID valido
-  if (regioneIdNum !== null && isNaN(regioneIdNum)) {
-    return NextResponse.json({ error: "regioneId non valido" }, { status: 400 });
+  const body = await leggiBodyOggetto(req);
+  if (!body) {
+    return NextResponse.json({ error: "Corpo della richiesta non valido" }, { status: 400 });
   }
   const normalized = {
     ...body,
-    regioneId: regioneIdNum,
-    pecArpaProvinciale: body.pecArpaProvinciale || null,
+    regioneId: normalizzaIdNumerico(body.regioneId),
+    pecArpaProvinciale: normalizzaStringaFacoltativa(body.pecArpaProvinciale),
   };
   const validation = validate(nuovaProvinciaSchema, normalized);
   if (!validation.success) {
@@ -76,10 +76,13 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ provincia }, { status: 201 });
   } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return NextResponse.json({ error: "Sigla già presente" }, { status: 400 });
+    }
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") {
+      return NextResponse.json({ error: "Regione non trovata" }, { status: 400 });
+    }
     logger.error({ err: e }, "Errore creazione provincia");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }

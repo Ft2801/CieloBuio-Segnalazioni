@@ -2,7 +2,10 @@
  * Rate limiting in-memory con escalation dei blocchi.
  *
  * Politica di blocco (applicata al login):
- * - 3 tentativi falliti consecutivi → blocco temporaneo
+ * - 20 tentativi falliti per IP e 3 per email nella finestra di 15 minuti,
+ *   poi blocco temporaneo. Il limite per IP è più alto perché molti utenti
+ *   possono condividere lo stesso IP pubblico (rete di un ufficio); il limite
+ *   per email resta basso perché protegge il singolo account.
  * - 1° blocco: 5 minuti
  * - 2° blocco (entro 1 ora dal primo): 15 minuti
  * - 3° blocco (entro 1 ora dal secondo): 1 ora
@@ -56,7 +59,7 @@ export function getBlockDuration(blockCount: number): number {
 // discriminata da `allowed` per permettere a TypeScript di inferire il
 // tipo corretto dopo un check `if (!rl.allowed)`, eliminando la
 // necessità di fallback difensivi (`?? 0`) nei chiamanti.
-export type RateLimitResult =
+type RateLimitResult =
   | { allowed: true; remaining: number; retryAfterSeconds: null; blockCount: number }
   | { allowed: false; remaining: 0; retryAfterSeconds: number; blockCount: number };
 
@@ -77,7 +80,7 @@ export function checkRateLimit(
   maxAttempts: number = 3,
   windowMs: number = 15 * 60 * 1000,
   blockResetMs: number = 60 * 60 * 1000,
-  lockMs?: number
+  lockMs?: number,
 ): RateLimitResult {
   cleanup();
   const now = Date.now();
@@ -95,7 +98,10 @@ export function checkRateLimit(
   }
 
   // Se il lock è scaduto, mantieni il blockCount per escalation (se entro blockResetMs)
-  if (entry?.lockedUntil && entry.lockedUntil < now) {
+  // All'istante esatto di scadenza il blocco non è più attivo: usare <=
+  // evita di contare ancora il tentativo nella finestra precedente e
+  // ribloccare immediatamente l'utente nello stesso millisecondo.
+  if (entry?.lockedUntil && entry.lockedUntil <= now) {
     const blockExpired = now - entry.lastBlock > blockResetMs;
     if (blockExpired) {
       // Reset completo: il blocco è troppo vecchio

@@ -29,9 +29,9 @@ describe("isValidCuid", () => {
 
   it("respinge stringhe troppo lunghe (> 31 char)", () => {
     // Il regex è c[a-z0-9]{20,30} = lunghezza totale 21-31
-    expect(isValidCuid("c" + "x".repeat(30))).toBe(true);  // 31 char totali, ok
-    expect(isValidCuid("c" + "x".repeat(31))).toBe(false);  // 32 char, troppo lungo
-    expect(isValidCuid("c" + "x".repeat(50))).toBe(false);  // 51 char, troppo lungo
+    expect(isValidCuid("c" + "x".repeat(30))).toBe(true); // 31 char totali, ok
+    expect(isValidCuid("c" + "x".repeat(31))).toBe(false); // 32 char, troppo lungo
+    expect(isValidCuid("c" + "x".repeat(50))).toBe(false); // 51 char, troppo lungo
   });
 
   it("respinge caratteri non alfanumerici", () => {
@@ -64,7 +64,7 @@ describe("isSafePathSegment", () => {
   it("respinge .. (path traversal classico)", () => {
     expect(isSafePathSegment("..")).toBe(false);
     expect(isSafePathSegment("../etc")).toBe(false);
-    expect(isSafePathSegment("a..b")).toBe(false);  // contains ..
+    expect(isSafePathSegment("a..b")).toBe(false); // contains ..
   });
 
   it("respinge . (riferimento implicito alla directory corrente)", () => {
@@ -95,11 +95,8 @@ describe("parseUrlStorageSicuro", () => {
     });
   });
 
-  it("accetta formato legacy api/allegatiplaceholder/<id>/<filename>", () => {
-    expect(parseUrlStorageSicuro("api/allegatiplaceholder/cabcdefghij1234567890/file.jpg")).toEqual({
-      segnalazioneId: "cabcdefghij1234567890",
-      filename: "file.jpg",
-    });
+  it("respinge un percorso con prefisso non previsto e segmenti in eccesso", () => {
+    expect(parseUrlStorageSicuro("formato/non/valido/cabcdefghij1234567890/file.jpg")).toBe(null);
   });
 
   it("respinge null/undefined passati come any (ramo typeof)", () => {
@@ -118,20 +115,18 @@ describe("parseUrlStorageSicuro", () => {
     expect(parseUrlStorageSicuro("a/b/c/d/e")).toBe(null);
   });
 
-  it("respinge formato legacy con prefisso errato", () => {
+  it("respinge prefissi di percorso non previsti", () => {
     expect(parseUrlStorageSicuro("api/wrongprefix/cid/file.jpg")).toBe(null);
-    expect(parseUrlStorageSicuro("other/allegatiplaceholder/cid/file.jpg")).toBe(null);
+    expect(parseUrlStorageSicuro("altro/formato/cid/file.jpg")).toBe(null);
   });
 
   it("respinge segmenti con path traversal (..)", () => {
     expect(parseUrlStorageSicuro("../etc/passwd")).toBe(null);
-    expect(parseUrlStorageSicuro("api/allegatiplaceholder/../../etc/passwd")).toBe(null);
     expect(parseUrlStorageSicuro("cabcdefghij1234567890/..")).toBe(null);
   });
 
   it("respinge segmenti con separatori (filename con /)", () => {
     expect(parseUrlStorageSicuro("segid/etc/passwd")).toBe(null);
-    expect(parseUrlStorageSicuro("api/allegatiplaceholder/segid/etc/passwd")).toBe(null);
   });
 });
 

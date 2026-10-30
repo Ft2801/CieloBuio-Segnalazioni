@@ -1,13 +1,17 @@
 /**
  * Test per il ramo residuo di validation.ts:
- * - validate() ritorna "Validazione fallita" se result.error.issues è vuoto (riga 178)
+ * - validate() ritorna "Validazione fallita" se result.error.issues è vuoto
  *
  * Per coprire questo ramo usiamo vi.spyOn su ZodSchema.prototype.safeParse
  * per simulare un risultato di errore senza issues.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { z } from "zod";
 import { validate, validaPecCcAggiuntive } from "@/lib/validation";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("validate - ramo fallback 'Validazione fallita'", () => {
   it("ritorna il messaggio della prima issue quando presente", () => {
@@ -27,14 +31,13 @@ describe("validate - ramo fallback 'Validazione fallita'", () => {
         issues: [], // issues vuoto: firstError sarà undefined -> ramo ??
       },
     };
-    vi.spyOn(schema, "safeParse").mockReturnValue(fakeResult as any);
+    vi.spyOn(schema, "safeParse").mockReturnValue(fakeResult as never);
 
     const result = validate(schema, "test");
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error).toBe("Validazione fallita");
     }
-    vi.restoreAllMocks();
   });
 
   it("ritorna 'Validazione fallita' se firstError.message è undefined", () => {
@@ -45,14 +48,13 @@ describe("validate - ramo fallback 'Validazione fallita'", () => {
         issues: [{ message: undefined, path: [], code: "custom" }],
       },
     };
-    vi.spyOn(schema, "safeParse").mockReturnValue(fakeResult as any);
+    vi.spyOn(schema, "safeParse").mockReturnValue(fakeResult as never);
 
     const result = validate(schema, "test");
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error).toBe("Validazione fallita");
     }
-    vi.restoreAllMocks();
   });
 
   it("validate con schema any ritorna success", () => {

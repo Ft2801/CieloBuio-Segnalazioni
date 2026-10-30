@@ -5,10 +5,14 @@
 
 import { db } from "@/lib/db";
 import { cookies } from "next/headers";
-import { randomBytes, createHash, timingSafeEqual } from "crypto";
+import { randomBytes, createHash } from "crypto";
 import bcrypt from "bcryptjs";
 import { logger } from "@/lib/logger";
 import { ruoloSchema } from "@/lib/validation";
+import type { SessionUser } from "@/lib/types";
+import { timingSafeEqualStrings } from "@/lib/confronto-sicuro";
+
+export { timingSafeEqualStrings };
 
 // Il prefisso __Host- è un marker di sicurezza che i browser moderni
 // riconoscono: impone che il cookie sia Path=/, Secure, e senza attributo
@@ -21,10 +25,7 @@ import { ruoloSchema } from "@/lib/validation";
 export function getSessionCookieName(): string {
   return process.env.NODE_ENV === "production" ? "__Host-cb_session" : "cb_session";
 }
-// Backward compatibility: costante calcolata all'import. Per test che
-// cambiano NODE_ENV a runtime, usare getSessionCookieName().
-export const SESSION_COOKIE = getSessionCookieName();
-const SESSION_DURATION_MS = 1000 * 60 * 60 * 8; // 8 ore (ridotto da 7 giorni per sicurezza)
+const SESSION_DURATION_MS = 1000 * 60 * 60 * 8; // 8 ore
 const SESSION_DURATION_SEC = Math.floor(SESSION_DURATION_MS / 1000);
 const BCRYPT_COST = 12; // raccomandazione moderna OWASP
 
@@ -40,42 +41,52 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export type SessionUser = {
-  id: string;
-  email: string;
-  nomeCognome: string;
-  ruolo: "volontario" | "referente_provinciale" | "referente_regionale" | "admin";
-  provinciaId: number | null;
-  regioneId: number | null;
-  inizialiProtocollo: string | null;
-  pec: string | null;
-  emailOrdinaria: string | null;
-  indirizzo: string | null;
-  firma: string | null;
-};
+// Tipo unico della sessione: definito in types.ts e riesportato qui per
+// comodità di import nelle route che usano già auth.ts.
+export type { SessionUser };
 
 export async function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, BCRYPT_COST);
 }
 
-export async function verifyPassword(
-  password: string,
-  hash: string
-): Promise<boolean> {
+export async function verifyPassword(password: string, hash: string): Promise<boolean> {
   return bcrypt.compare(password, hash);
 }
 
-export async function createSession(userId: string): Promise<string> {
+export class CredenzialiCambiate extends Error {}
+
+type CredenzialiVerificate = {
+  passwordHash: string;
+  totpSecret: string | null;
+  totpVerifiedAt: Date | null;
+};
+
+export async function createSession(userId: string, credenziali?: CredenzialiVerificate): Promise<string> {
   const token = randomBytes(32).toString("hex");
   const tokenHash = hashToken(token);
   const scadenza = new Date(Date.now() + SESSION_DURATION_MS);
 
-  // L1: invalida tutte le sessioni precedenti dello stesso utente (session rotation)
+  // Invalida tutte le sessioni precedenti dello stesso utente (session rotation)
   // per prevenire session fixation. Mantiene solo la nuova sessione.
-  await db.$transaction([
-    db.sessione.deleteMany({ where: { userId } }),
-    db.sessione.create({ data: { userId, token: tokenHash, scadenza } }),
-  ]);
+  if (credenziali) {
+    await db.$transaction(async (tx) => {
+      // La scrittura condizionale blocca l'utente fino al commit della
+      // sessione. Un reset password o cambio 2FA concorrente o precede
+      // questo controllo (e viene rilevato), o segue la sessione.
+      const corrente = await tx.user.updateMany({
+        where: { id: userId, attivo: true, ...credenziali },
+        data: { attivo: true },
+      });
+      if (corrente.count !== 1) throw new CredenzialiCambiate();
+      await tx.sessione.deleteMany({ where: { userId } });
+      await tx.sessione.create({ data: { userId, token: tokenHash, scadenza } });
+    });
+  } else {
+    await db.$transaction([
+      db.sessione.deleteMany({ where: { userId } }),
+      db.sessione.create({ data: { userId, token: tokenHash, scadenza } }),
+    ]);
+  }
   return token;
 }
 
@@ -92,7 +103,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     include: { user: true },
   });
   if (!sessione) return null;
-  if (sessione.scadenza < new Date()) {
+  if (sessione.scadenza <= new Date()) {
     await db.sessione.delete({ where: { id: sessione.id } }).catch((e: unknown) => {
       logger.warn({ err: e }, "Errore non bloccante durante eliminazione sessione scaduta");
     });
@@ -103,7 +114,10 @@ export async function getSessionUser(): Promise<SessionUser | null> {
     // (es. admin ha settato attivo=false nel pannello). Invalida subito la
     // sessione per evitare che resti valida fino alla scadenza naturale.
     await db.sessione.delete({ where: { id: sessione.id } }).catch((e: unknown) => {
-      logger.warn({ err: e, userId: sessione.user.id }, "Errore non bloccante durante eliminazione sessione di utente disattivato");
+      logger.warn(
+        { err: e, userId: sessione.user.id },
+        "Errore non bloccante durante eliminazione sessione di utente disattivato",
+      );
     });
     return null;
   }
@@ -113,7 +127,10 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   // con ruolo non gestito dai controlli di autorizzazione downstream.
   const ruoloResult = ruoloSchema.safeParse(sessione.user.ruolo);
   if (!ruoloResult.success) {
-    logger.error({ userId: sessione.user.id, ruolo: sessione.user.ruolo }, "Ruolo utente non valido nel DB, sessione rifiutata");
+    logger.error(
+      { userId: sessione.user.id, ruolo: sessione.user.ruolo },
+      "Ruolo utente non valido nel DB, sessione rifiutata",
+    );
     return null;
   }
 
@@ -160,24 +177,6 @@ export function clearSessionCookie(): string {
   return `${cookieName}=; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=0`;
 }
 
-/**
- * Confronta due stringhe in modo timing-safe. Usato per verifiche
- * di token/secret dove il tempo di risposta non deve rivelare
- * informazioni sul valore atteso (timing side-channel).
- *
- * L'implementazione fa un hash SHA-256 di entrambe le stringhe prima
- * del confronto: questo normalizza la lunghezza (sempre 32 byte), così
- * l'early return sulla disuguaglianza di lunghezza non può rivelare
- * informazioni sulla lunghezza del secret atteso. L'hash è
- * deterministico e non introduce entropia aggiuntiva: la sicurezza
- * resta legata al confronto byte-a-byte timing-safe sul digest.
- */
-export function timingSafeEqualStrings(a: string, b: string): boolean {
-  const hashA = createHash("sha256").update(a, "utf8").digest();
-  const hashB = createHash("sha256").update(b, "utf8").digest();
-  return timingSafeEqual(hashA, hashB);
-}
-
 // ---------------------------------------------------------------------------
 // Helpers per i ruoli
 // ---------------------------------------------------------------------------
@@ -187,11 +186,7 @@ export function canViewAllSegnalazioni(user: SessionUser): boolean {
 }
 
 export function canReviewSegnalazioni(user: SessionUser): boolean {
-  return (
-    user.ruolo === "admin" ||
-    user.ruolo === "referente_provinciale" ||
-    user.ruolo === "referente_regionale"
-  );
+  return user.ruolo === "admin" || user.ruolo === "referente_provinciale" || user.ruolo === "referente_regionale";
 }
 
 export function canSendPec(user: SessionUser): boolean {
@@ -215,7 +210,7 @@ export function canManageConfiguration(user: SessionUser): boolean {
  */
 export function hasTerritorialCompetence(
   user: SessionUser,
-  segnalazione: { provinciaId: number | null; regioneId: number | null }
+  segnalazione: { provinciaId: number | null; regioneId: number | null },
 ): boolean {
   if (user.ruolo === "admin") return true;
   if (user.ruolo === "referente_provinciale") {
@@ -244,7 +239,7 @@ export function hasTerritorialCompetence(
  */
 export function canViewSegnalazione(
   user: SessionUser,
-  segnalazione: { volontarioId: string | null; provinciaId: number | null; regioneId: number | null }
+  segnalazione: { volontarioId: string | null; provinciaId: number | null; regioneId: number | null },
 ): boolean {
   if (user.ruolo === "admin") return true;
   if (user.ruolo === "referente_provinciale") {

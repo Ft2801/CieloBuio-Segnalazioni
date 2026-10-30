@@ -32,7 +32,7 @@ and/or modify the software.
 A secondary benefit of defending all users' freedom is that
 improvements made in alternate versions of the program, if they
 receive widespread use, become available for other developers to
-adopt. Many developers of free software are heartened and
+incorporate. Many developers of free software are heartened and
 encouraged by the resulting cooperation. However, in the case of
 software used on network servers, this result may fail to come about.
 The GNU General Public License permits making a modified version and
@@ -546,7 +546,7 @@ supports such interaction) an opportunity to receive the Corresponding
 Source of your version by providing access to the Corresponding Source
 from a network server at no charge, through some standard or customary
 means of facilitating copying of software. This Corresponding Source
-must include the Corresponding Source for any work covered by version 3
+shall include the Corresponding Source for any work covered by version 3
 of the GNU General Public License that is incorporated pursuant to the
 following paragraph.
 
@@ -574,9 +574,9 @@ Software Foundation. If the Program does not specify a version number
 of the GNU Affero General Public License, you may choose any version
 ever published by the Free Software Foundation.
 
-If the Program specifies that a proxy can decide whether future
-versions of the GNU Affero General Public License shall be
-applicable, that proxy's public statement of acceptance of a version
+If the Program specifies that a proxy can decide which future
+versions of the GNU Affero General Public License can be
+used, that proxy's public statement of acceptance of a version
 permanently authorizes you to choose that version for the Program.
 
 Later license versions may give you additional or different

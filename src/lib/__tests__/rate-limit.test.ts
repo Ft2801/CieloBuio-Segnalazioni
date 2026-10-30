@@ -7,9 +7,9 @@ import { checkRateLimit, resetRateLimit } from "@/lib/rate-limit";
 describe("checkRateLimit", () => {
   it("permette fino a 3 tentativi (maxAttempts=3)", () => {
     const key = `test-allow-${Date.now()}`;
-    expect(checkRateLimit(key, 3).allowed).toBe(true);  // count=1
-    expect(checkRateLimit(key, 3).allowed).toBe(true);  // count=2
-    expect(checkRateLimit(key, 3).allowed).toBe(true);  // count=3
+    expect(checkRateLimit(key, 3).allowed).toBe(true); // count=1
+    expect(checkRateLimit(key, 3).allowed).toBe(true); // count=2
+    expect(checkRateLimit(key, 3).allowed).toBe(true); // count=3
   });
 
   it("blocca al 4° tentativo", () => {
@@ -33,11 +33,12 @@ describe("checkRateLimit", () => {
     expect(result.remaining).toBe(0);
   });
 
-  it("resetRateLimit sblocca il rate limit", () => {
+  it("resetRateLimit sblocca una chiave bloccata", () => {
     const key = `test-reset-${Date.now()}-${Math.random()}`;
     checkRateLimit(key, 3);
     checkRateLimit(key, 3);
     checkRateLimit(key, 3);
+    expect(checkRateLimit(key, 3).allowed).toBe(false); // al 4° tentativo la chiave è bloccata
     resetRateLimit(key);
     expect(checkRateLimit(key, 3).allowed).toBe(true);
   });
@@ -46,7 +47,7 @@ describe("checkRateLimit", () => {
     expect(() => resetRateLimit("chiave-inesistente")).not.toThrow();
   });
 
-  it("blockCount cresce con escalation", () => {
+  it("il primo blocco registra blockCount 1", () => {
     const key = `test-esc-${Date.now()}-${Math.random()}`;
     for (let i = 0; i < 3; i++) checkRateLimit(key, 3);
     const result = checkRateLimit(key, 3);

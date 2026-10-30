@@ -8,9 +8,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { Prisma } from "@prisma/client";
 import { getSessionUser, canManageConfiguration } from "@/lib/auth";
 import { nuovaRegioneSchema, validate } from "@/lib/validation";
 import { logger } from "@/lib/logger";
+import { leggiBodyOggetto } from "@/lib/http";
 
 export async function GET() {
   const user = await getSessionUser();
@@ -27,11 +29,17 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const user = await getSessionUser();
-  if (!user || !canManageConfiguration(user)) {
+  if (!user) {
+    return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
+  }
+  if (!canManageConfiguration(user)) {
     return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
   }
 
-  const body = await req.json().catch(() => ({}));
+  const body = await leggiBodyOggetto(req);
+  if (!body) {
+    return NextResponse.json({ error: "Corpo della richiesta non valido" }, { status: 400 });
+  }
   const validation = validate(nuovaRegioneSchema, body);
   if (!validation.success) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
@@ -56,10 +64,10 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ regione }, { status: 201 });
   } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return NextResponse.json({ error: "Esiste già una regione con questo nome" }, { status: 400 });
+    }
     logger.error({ err: e }, "Errore creazione regione");
-    return NextResponse.json(
-      { error: "Errore interno del server" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Errore interno del server" }, { status: 500 });
   }
 }
